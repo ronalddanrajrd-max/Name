@@ -48,6 +48,7 @@ class OkveHUBBot(commands.Bot):
             "Giveaway",
             "Levels",
             "Utility",
+            "Reglement",
         ]
 
         for cog in cogs:
