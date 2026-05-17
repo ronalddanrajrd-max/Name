@@ -7,7 +7,7 @@ import secrets
 from Bot import OkveHUBBot
 
 app = Flask(__name__)
-app.secret_key = os.getenv("ADMIN_SECRET", "change-moi")
+app.secret_key = os.getenv("ADMIN_SECRET", "okvehub_secret_123")
 
 DB_PATH = "okvehub.db"
 
@@ -18,7 +18,7 @@ def db():
     return conn
 
 
-def init_extra_db():
+def init_db_site():
     conn = db()
 
     conn.execute("""
@@ -60,7 +60,7 @@ def init_extra_db():
     INSERT OR IGNORE INTO scripts
     (name, description, price, category, active, code)
     VALUES
-    ('main', 'Script principal', 0, 'main', 1, '-- colle ton script ici')
+    ('main', 'Script principal', 0, 'main', 1, 'print("OkveHUB Loaded")')
     """)
 
     conn.commit()
@@ -69,18 +69,88 @@ def init_extra_db():
 
 STYLE = """
 <style>
-body{margin:0;background:#0f172a;color:#fff;font-family:Arial}
-.sidebar{position:fixed;left:0;top:0;width:230px;height:100vh;background:#020617;padding:25px}
-.sidebar h2{color:#38bdf8}
-.sidebar a{display:block;color:#cbd5e1;text-decoration:none;margin:18px 0}
-.main{margin-left:280px;padding:35px}
-.card{background:#1e293b;padding:22px;border-radius:18px;margin-bottom:22px;box-shadow:0 10px 25px #0005}
-input,textarea,select{width:100%;padding:12px;border-radius:10px;border:0;margin:8px 0;background:#334155;color:white}
-button{background:#38bdf8;border:0;padding:12px 18px;border-radius:10px;font-weight:bold;cursor:pointer}
-table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden}
-th,td{padding:12px;border-bottom:1px solid #334155;text-align:left}
-a{color:#38bdf8}
-.danger{color:#fb7185}
+body{
+    margin:0;
+    background:#0f172a;
+    color:white;
+    font-family:Arial, sans-serif;
+}
+.sidebar{
+    position:fixed;
+    left:0;
+    top:0;
+    width:240px;
+    height:100vh;
+    background:#020617;
+    padding:25px;
+}
+.sidebar h2{
+    color:#38bdf8;
+    margin-bottom:30px;
+}
+.sidebar a{
+    display:block;
+    color:#cbd5e1;
+    text-decoration:none;
+    margin:18px 0;
+    font-size:16px;
+}
+.sidebar a:hover{
+    color:#38bdf8;
+}
+.main{
+    margin-left:290px;
+    padding:35px;
+}
+.card{
+    background:#1e293b;
+    padding:22px;
+    border-radius:18px;
+    margin-bottom:22px;
+    box-shadow:0 10px 25px #0005;
+}
+input, textarea, select{
+    width:100%;
+    padding:12px;
+    border-radius:10px;
+    border:0;
+    margin:8px 0;
+    background:#334155;
+    color:white;
+    box-sizing:border-box;
+}
+button{
+    background:#38bdf8;
+    border:0;
+    padding:12px 18px;
+    border-radius:10px;
+    font-weight:bold;
+    cursor:pointer;
+}
+button:hover{
+    background:#0ea5e9;
+}
+table{
+    width:100%;
+    border-collapse:collapse;
+    background:#1e293b;
+    border-radius:12px;
+    overflow:hidden;
+}
+th,td{
+    padding:12px;
+    border-bottom:1px solid #334155;
+    text-align:left;
+}
+a{
+    color:#38bdf8;
+}
+.danger{
+    color:#fb7185;
+}
+.ok{
+    color:#22c55e;
+}
 </style>
 """
 
@@ -95,7 +165,9 @@ def layout(content):
         <a href="/keys">Keys</a>
         <a href="/logout">Déconnexion</a>
     </div>
-    <div class="main">{content}</div>
+    <div class="main">
+        {content}
+    </div>
     """
 
 
@@ -106,7 +178,9 @@ def protect():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        if request.form.get("password") == os.getenv("ADMIN_PASSWORD", "admin123"):
+        password = request.form.get("password")
+
+        if password == os.getenv("ADMIN_PASSWORD", "admin123"):
             session["admin"] = True
             return redirect("/")
 
@@ -129,14 +203,28 @@ def home():
     conn = db()
     whitelist_count = conn.execute("SELECT COUNT(*) c FROM whitelist").fetchone()["c"]
     keys_count = conn.execute("SELECT COUNT(*) c FROM keys").fetchone()["c"]
+    used_keys = conn.execute("SELECT COUNT(*) c FROM keys WHERE used_by IS NOT NULL").fetchone()["c"]
     scripts_count = conn.execute("SELECT COUNT(*) c FROM scripts WHERE active=1").fetchone()["c"]
     conn.close()
 
     return layout(f"""
     <h1>Dashboard Admin</h1>
-    <div class="card"><h2>Whitelist</h2><p>{whitelist_count} utilisateurs whitelist</p></div>
-    <div class="card"><h2>Keys</h2><p>{keys_count} clés créées</p></div>
-    <div class="card"><h2>Scripts</h2><p>{scripts_count} scripts actifs</p></div>
+
+    <div class="card">
+        <h2>Whitelist</h2>
+        <p>{whitelist_count} utilisateur(s) whitelist</p>
+    </div>
+
+    <div class="card">
+        <h2>Keys</h2>
+        <p>{keys_count} clé(s) créée(s)</p>
+        <p>{used_keys} clé(s) utilisée(s)</p>
+    </div>
+
+    <div class="card">
+        <h2>Scripts</h2>
+        <p>{scripts_count} script(s) actif(s)</p>
+    </div>
     """)
 
 
@@ -151,27 +239,31 @@ def whitelist():
 
     html = """
     <h1>Whitelist</h1>
+
     <div class="card">
-    <table>
-        <tr>
-            <th>User ID</th>
-            <th>Username</th>
-            <th>Script</th>
-            <th>HWID</th>
-            <th>Action</th>
-        </tr>
-        {% for u in rows %}
-        <tr>
-            <td>{{u["user_id"]}}</td>
-            <td>{{u["username"]}}</td>
-            <td>{{u["script_access"]}}</td>
-            <td>{{u["hwid"] or "Aucun"}}</td>
-            <td><a class="danger" href="/remove/{{u['user_id']}}">Supprimer</a></td>
-        </tr>
-        {% endfor %}
-    </table>
+        <table>
+            <tr>
+                <th>User ID</th>
+                <th>Username</th>
+                <th>Script</th>
+                <th>HWID</th>
+                <th>Action</th>
+            </tr>
+            {% for u in rows %}
+            <tr>
+                <td>{{u["user_id"]}}</td>
+                <td>{{u["username"]}}</td>
+                <td>{{u["script_access"]}}</td>
+                <td>{{u["hwid"] or "Aucun"}}</td>
+                <td>
+                    <a class="danger" href="/remove/{{u['user_id']}}">Supprimer</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
     </div>
     """
+
     return layout(render_template_string(html, rows=rows))
 
 
@@ -184,6 +276,7 @@ def remove(user_id):
     conn.execute("DELETE FROM whitelist WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
+
     return redirect("/whitelist")
 
 
@@ -195,8 +288,8 @@ def scripts():
     conn = db()
 
     if request.method == "POST":
-        name = request.form.get("name", "main")
-        description = request.form.get("description", "")
+        name = request.form.get("name", "main").strip()
+        description = request.form.get("description", "").strip()
         code = request.form.get("code", "")
 
         conn.execute("""
@@ -215,20 +308,26 @@ def scripts():
 
     html = """
     <h1>Scripts</h1>
+
     <div class="card">
-        <h2>Modifier le script</h2>
+        <h2>Modifier / Ajouter un script</h2>
+
         <form method="post">
             <input name="name" value="main" placeholder="Nom du script">
-            <input name="description" placeholder="Description">
-            <textarea name="code" rows="14" placeholder="Colle ton script ici"></textarea>
-            <button>Enregistrer</button>
+            <input name="description" placeholder="Description du script">
+            <textarea name="code" rows="16" placeholder="Colle ton script Lua ici"></textarea>
+            <button>Enregistrer le script</button>
         </form>
     </div>
 
     <div class="card">
         <h2>Scripts enregistrés</h2>
+
         <table>
-            <tr><th>Nom</th><th>Description</th></tr>
+            <tr>
+                <th>Nom</th>
+                <th>Description</th>
+            </tr>
             {% for s in rows %}
             <tr>
                 <td>{{s["name"]}}</td>
@@ -238,6 +337,7 @@ def scripts():
         </table>
     </div>
     """
+
     return layout(render_template_string(html, rows=rows))
 
 
@@ -249,9 +349,14 @@ def keys():
     conn = db()
 
     if request.method == "POST":
-        key = "OKV-" + secrets.token_hex(4).upper()
+        key = "OKV-" + secrets.token_hex(8).upper()
         script_name = request.form.get("script_name", "main")
-        conn.execute("INSERT INTO keys (key_code, script_name) VALUES (?, ?)", (key, script_name))
+
+        conn.execute(
+            "INSERT INTO keys (key_code, script_name) VALUES (?, ?)",
+            (key, script_name)
+        )
+
         conn.commit()
 
     scripts = conn.execute("SELECT name FROM scripts WHERE active=1").fetchall()
@@ -260,33 +365,83 @@ def keys():
 
     html = """
     <h1>Keys</h1>
+
     <div class="card">
-        <h2>Créer une clé</h2>
+        <h2>Créer une key</h2>
+
         <form method="post">
             <select name="script_name">
                 {% for s in scripts %}
                 <option value="{{s['name']}}">{{s['name']}}</option>
                 {% endfor %}
             </select>
+
             <button>Créer une key</button>
         </form>
     </div>
 
     <div class="card">
-        <h2>Liste des clés</h2>
+        <h2>Liste des keys</h2>
+
         <table>
-            <tr><th>Key</th><th>Script</th><th>Utilisée par</th></tr>
+            <tr>
+                <th>Key</th>
+                <th>Script</th>
+                <th>Statut</th>
+            </tr>
             {% for k in rows %}
             <tr>
                 <td>{{k["key_code"]}}</td>
                 <td>{{k["script_name"]}}</td>
-                <td>{{k["used_by"] or "Non utilisée"}}</td>
+                <td>
+                    {% if k["used_by"] %}
+                        <span class="ok">Utilisée par {{k["used_by"]}}</span>
+                    {% else %}
+                        Non utilisée
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </table>
     </div>
     """
+
     return layout(render_template_string(html, rows=rows, scripts=scripts))
+
+
+@app.route("/load")
+def load_script():
+    key = request.args.get("key", "").strip().upper()
+
+    if not key:
+        return "print('Key manquante')", 200, {"Content-Type": "text/plain"}
+
+    conn = db()
+
+    row = conn.execute(
+        "SELECT * FROM keys WHERE key_code=?",
+        (key,)
+    ).fetchone()
+
+    if not row:
+        conn.close()
+        return "print('Key invalide')", 200, {"Content-Type": "text/plain"}
+
+    script_name = row["script_name"] or "main"
+
+    script = conn.execute(
+        "SELECT * FROM scripts WHERE name=? AND active=1",
+        (script_name,)
+    ).fetchone()
+
+    conn.close()
+
+    if not script:
+        return "print('Script introuvable')", 200, {"Content-Type": "text/plain"}
+
+    code = script["code"] or "print('Script vide')"
+
+    return code, 200, {"Content-Type": "text/plain"}
 
 
 @app.route("/logout")
@@ -297,6 +452,7 @@ def logout():
 
 def run_bot():
     token = os.getenv("TOKEN")
+
     if not token:
         print("TOKEN manquant dans Railway Variables")
         return
@@ -306,7 +462,7 @@ def run_bot():
 
 
 if __name__ == "__main__":
-    init_extra_db()
+    init_db_site()
 
     threading.Thread(target=run_bot, daemon=True).start()
 
