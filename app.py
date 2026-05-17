@@ -6,13 +6,23 @@ app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", "change-moi")
 DB_PATH = "okvehub.db"
 
-def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
 def init_extra_db():
     conn = db()
+
+    # TABLE SCRIPTS
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS scripts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
+        description TEXT,
+        price REAL DEFAULT 0,
+        category TEXT DEFAULT 'general',
+        active INTEGER DEFAULT 1,
+        code TEXT
+    )
+    """)
+
+    # TABLE KEYS
     conn.execute("""
     CREATE TABLE IF NOT EXISTS keys (
         key_code TEXT PRIMARY KEY,
@@ -22,14 +32,22 @@ def init_extra_db():
         created_at INTEGER DEFAULT (strftime('%s','now'))
     )
     """)
-    try:
-        conn.execute("ALTER TABLE scripts ADD COLUMN code TEXT")
-    except:
-        pass
+
+    # SCRIPT PAR DÉFAUT
     conn.execute("""
-    INSERT OR IGNORE INTO scripts (name, description, price, category, active, code)
-    VALUES ('main', 'Script principal', 0, 'main', 1, '-- colle ton script ici')
+    INSERT OR IGNORE INTO scripts
+    (name, description, price, category, active, code)
+    VALUES
+    (
+        'main',
+        'Script principal',
+        0,
+        'main',
+        1,
+        '-- colle ton script ici'
+    )
     """)
+
     conn.commit()
     conn.close()
 
