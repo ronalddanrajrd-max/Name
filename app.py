@@ -2,6 +2,7 @@ from flask import Flask, render_template_string
 import sqlite3
 import threading
 import asyncio
+import os
 from Bot import OkveHUBBot
 
 app = Flask(__name__)
@@ -25,7 +26,12 @@ def whitelist():
     html = """
     <h1>Liste Whitelist</h1>
     <table border="1" cellpadding="8">
-        <tr><th>User ID</th><th>Username</th><th>Script</th><th>HWID</th></tr>
+        <tr>
+            <th>User ID</th>
+            <th>Username</th>
+            <th>Script</th>
+            <th>HWID</th>
+        </tr>
         {% for user in rows %}
         <tr>
             <td>{{ user["user_id"] }}</td>
@@ -39,10 +45,16 @@ def whitelist():
     return render_template_string(html, rows=rows)
 
 def run_bot():
-    bot = OkveHUBBot()
-    asyncio.run(bot.start(__import__("os").getenv("TOKEN")))
+    token = os.getenv("TOKEN")
+    if not token:
+        print("TOKEN manquant")
+        return
 
-threading.Thread(target=run_bot, daemon=True).start()
+    bot = OkveHUBBot()
+    asyncio.run(bot.start(token))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+    threading.Thread(target=run_bot, daemon=True).start()
+
+    port = int(os.getenv("PORT", 3000))
+    app.run(host="0.0.0.0", port=port)
