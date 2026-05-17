@@ -70,11 +70,11 @@ class WhitelistPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.success, custom_id="funhub_redeem_key")
+    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.success, custom_id="Okvehub_redeem_key")
     async def redeem_key(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-    @discord.ui.button(label="📜 Get Script", style=discord.ButtonStyle.primary, custom_id="funhub_get_script")
+    @discord.ui.button(label="📜 Get Script", style=discord.ButtonStyle.primary, custom_id="Okvehub_get_script")
     async def get_script(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -110,7 +110,7 @@ loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
             ephemeral=True
         )
 
-    @discord.ui.button(label="👤 Get Role", style=discord.ButtonStyle.primary, custom_id="funhub_get_role")
+    @discord.ui.button(label="👤 Get Role", style=discord.ButtonStyle.primary, custom_id="Okvehub_get_role")
     async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -141,7 +141,7 @@ loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
             ephemeral=True
         )
 
-    @discord.ui.button(label="⚙️ Reset HWID", style=discord.ButtonStyle.secondary, custom_id="funhub_reset_hwid")
+    @discord.ui.button(label="⚙️ Reset HWID", style=discord.ButtonStyle.secondary, custom_id="Okvehub_reset_hwid")
     async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -158,13 +158,13 @@ loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
             ephemeral=True
         )
 
-    @discord.ui.button(label="📊 Get Stats", style=discord.ButtonStyle.secondary, custom_id="funhub_get_stats")
+    @discord.ui.button(label="📊 Get Stats", style=discord.ButtonStyle.secondary, custom_id="Okvehub_get_stats")
     async def get_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         total_wl = await db_fetchall("SELECT * FROM whitelist")
         total_keys = await db_fetchall("SELECT * FROM keys")
         used_keys = await db_fetchall("SELECT * FROM keys WHERE used_by IS NOT NULL")
 
-        embed = discord.Embed(title="📊 FunHub Stats", color=0x3498DB)
+        embed = discord.Embed(title="📊 Okvehub Stats", color=0x3498DB)
         embed.add_field(name="Whitelisted", value=str(len(total_wl)), inline=True)
         embed.add_field(name="Keys", value=str(len(total_keys)), inline=True)
         embed.add_field(name="Used Keys", value=str(len(used_keys)), inline=True)
@@ -182,9 +182,9 @@ class Whitelist(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="FunHub",
+            title="Okvehub",
             description=(
-                "This control panel is for the project: **FunHub**\n"
+                "This control panel is for the project: **Okvehub**\n"
                 "If you're a buyer, click on the buttons below to redeem your key, get the script or\n"
                 "get your role"
             ),
