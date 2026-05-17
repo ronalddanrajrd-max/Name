@@ -70,11 +70,11 @@ class WhitelistPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.success, custom_id="okvehub_redeem_key_v2")
+    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.success, custom_id="funhub_redeem_key")
     async def redeem_key(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-    @discord.ui.button(label="📜 Get Script", style=discord.ButtonStyle.primary, custom_id="okvehub_get_script_v2")
+    @discord.ui.button(label="📜 Get Script", style=discord.ButtonStyle.primary, custom_id="funhub_get_script")
     async def get_script(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -91,31 +91,26 @@ class WhitelistPanel(discord.ui.View):
 
         if not key:
             return await interaction.response.send_message(
-                embed=error_embed("No Key Found", "No key is linked to your account."),
+                embed=error_embed("No Key", "No key is linked to your account."),
                 ephemeral=True
             )
 
         base_url = os.getenv("BASE_URL")
         if not base_url:
             return await interaction.response.send_message(
-                embed=error_embed("BASE_URL Missing", "Add BASE_URL in Railway variables."),
+                embed=error_embed("Config Error", "BASE_URL is missing in Railway."),
                 ephemeral=True
             )
 
-        loader = f'''script_key = "{key["key_code"]}"
-
+        loader = f'''script_key="{key["key_code"]}";
 loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
 
-        embed = discord.Embed(
-            title="📜 Your Script Loader",
-            description=f"```lua\n{loader}\n```",
-            color=0x5865F2
+        await interaction.response.send_message(
+            f"📜 **Your script:**\n```lua\n{loader}\n```",
+            ephemeral=True
         )
-        embed.set_footer(text="OkveHUB Loader System")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @discord.ui.button(label="👤 Get Role", style=discord.ButtonStyle.primary, custom_id="okvehub_get_role_v2")
+    @discord.ui.button(label="👤 Get Role", style=discord.ButtonStyle.primary, custom_id="funhub_get_role")
     async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -128,7 +123,7 @@ loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
         role_id = os.getenv("ROLE_WHITELIST")
         if not role_id:
             return await interaction.response.send_message(
-                embed=error_embed("Config Error", "ROLE_WHITELIST is missing in Railway."),
+                embed=error_embed("Config Error", "ROLE_WHITELIST is missing."),
                 ephemeral=True
             )
 
@@ -146,7 +141,7 @@ loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
             ephemeral=True
         )
 
-    @discord.ui.button(label="⚙️ Reset HWID", style=discord.ButtonStyle.secondary, custom_id="okvehub_reset_hwid_v2")
+    @discord.ui.button(label="⚙️ Reset HWID", style=discord.ButtonStyle.secondary, custom_id="funhub_reset_hwid")
     async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -159,24 +154,20 @@ loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
         await db_execute("UPDATE whitelist SET hwid=NULL WHERE user_id=?", (str(interaction.user.id),))
 
         await interaction.response.send_message(
-            embed=success_embed("HWID Reset", "Your HWID has been reset ✅"),
+            embed=success_embed("HWID Reset", "Your HWID has been reset."),
             ephemeral=True
         )
 
-    @discord.ui.button(label="📊 Get Stats", style=discord.ButtonStyle.secondary, custom_id="okvehub_get_stats_v2")
+    @discord.ui.button(label="📊 Get Stats", style=discord.ButtonStyle.secondary, custom_id="funhub_get_stats")
     async def get_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         total_wl = await db_fetchall("SELECT * FROM whitelist")
         total_keys = await db_fetchall("SELECT * FROM keys")
         used_keys = await db_fetchall("SELECT * FROM keys WHERE used_by IS NOT NULL")
 
-        embed = discord.Embed(
-            title="📊 OkveHUB Stats",
-            color=0x3498DB
-        )
-        embed.add_field(name="✅ Whitelisted", value=str(len(total_wl)), inline=True)
-        embed.add_field(name="🔑 Total Keys", value=str(len(total_keys)), inline=True)
-        embed.add_field(name="📌 Used Keys", value=str(len(used_keys)), inline=True)
-        embed.set_footer(text="OkveHUB Control Panel")
+        embed = discord.Embed(title="📊 FunHub Stats", color=0x3498DB)
+        embed.add_field(name="Whitelisted", value=str(len(total_wl)), inline=True)
+        embed.add_field(name="Keys", value=str(len(total_keys)), inline=True)
+        embed.add_field(name="Used Keys", value=str(len(used_keys)), inline=True)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -204,10 +195,18 @@ class Whitelist(commands.Cog):
             text=f"Sent by {interaction.user} • {discord.utils.utcnow().strftime('%d/%m/%Y %H:%M')}"
         )
 
-        if interaction.guild and interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
+        msg = await interaction.channel.send(embed=embed, view=WhitelistPanel())
 
-        await interaction.channel.send(embed=embed, view=WhitelistPanel())
+        reactions = [
+            "✅", "❤️", "🌐", "🆓", "😂", "🤧", "🇾", "🇹", "🇷",
+            "❌", "💀", "👍", "🥺", "ℹ️", "🧢", "6️⃣", "🇼", "🤢", "🧻", "☺️"
+        ]
+
+        for emoji in reactions:
+            try:
+                await msg.add_reaction(emoji)
+            except:
+                pass
 
         await interaction.response.send_message("✅ Panel envoyé.", ephemeral=True)
 
@@ -232,12 +231,6 @@ class Whitelist(commands.Cog):
             script
         ))
 
-        role_id = os.getenv("ROLE_WHITELIST")
-        if role_id:
-            role = interaction.guild.get_role(int(role_id))
-            if role:
-                await utilisateur.add_roles(role)
-
         await interaction.response.send_message(
             embed=success_embed("Whitelist ajoutée", f"{utilisateur.mention} a accès à **{script}**."),
             ephemeral=True
@@ -250,18 +243,12 @@ class Whitelist(commands.Cog):
 
         await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
 
-        role_id = os.getenv("ROLE_WHITELIST")
-        if role_id:
-            role = interaction.guild.get_role(int(role_id))
-            if role:
-                await utilisateur.remove_roles(role)
-
         await interaction.response.send_message(
             embed=success_embed("Whitelist retirée", f"{utilisateur.mention} n'est plus whitelist."),
             ephemeral=True
         )
 
-    @app_commands.command(name="wl-check", description="Vérifier la whitelist d'un utilisateur")
+    @app_commands.command(name="wl-check", description="Vérifier la whitelist")
     async def wl_check(self, interaction: discord.Interaction, utilisateur: discord.Member = None):
         target = utilisateur or interaction.user
 
@@ -278,7 +265,7 @@ class Whitelist(commands.Cog):
             ephemeral=True
         )
 
-    @app_commands.command(name="wl-list", description="Voir la liste des utilisateurs whitelist")
+    @app_commands.command(name="wl-list", description="Voir la liste whitelist")
     async def wl_list(self, interaction: discord.Interaction):
         if not await check_permission(interaction, "staff"):
             return
