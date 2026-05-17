@@ -1,86 +1,119 @@
+"""
+╔══════════════════════════════════════════════════════════╗
+║           OKVEHUB BOT — Bot de Gestion Admin             ║
+║          Développé pour OkveHUB Script Store             ║
+╚══════════════════════════════════════════════════════════╝
+"""
+
 import discord
 from discord.ext import commands
-import os
 import asyncio
+import os
+import time
 from dotenv import load_dotenv
-from utils.database import init_db
-from utils.logger import set_bot
+from Database import init_db
+import Logger
 
 load_dotenv()
 
-# ===== INTENTS =====
+# ══════════════════════════════════
+#     CONFIGURATION DU BOT
+# ══════════════════════════════════
 intents = discord.Intents.all()
 
-# ===== BOT =====
-class OkveHUB(commands.Bot):
+class OkveHUBBot(commands.Bot):
     def __init__(self):
         super().__init__(
-            command_prefix="!",      # Prefix de secours (slash commands = principal)
+            command_prefix="!",
             intents=intents,
             help_command=None,
+            case_insensitive=True
         )
-        self.spam_data: dict = {}   # Anti-spam : {user_id: [timestamps]}
+        self.start_time = time.time()
 
     async def setup_hook(self):
         # Init base de données
+        Logger.info("Initialisation de la base de données...")
         await init_db()
+        Logger.success("Base de données prête !")
 
         # Charger tous les cogs
-        cogs_dirs = [
-            "cogs/admin", "cogs/moderation", "cogs/whitelist",
-            "cogs/tickets", "cogs/giveaway", "cogs/levels",
-            "cogs/announcements", "cogs/utility", "cogs/automod",
-            "cogs/fun",
+        cogs = [
+            "Events",
+            "Whitelist",
+            "Moderation",
+            "Tickets",
+            "Admin",
+            "Announcements",
+            "Giveaway",
+            "Levels",
+            "Utility",
         ]
-        loaded = 0
-        for folder in cogs_dirs:
-            if not os.path.exists(folder):
-                continue
-            for filename in os.listdir(folder):
-                if filename.endswith(".py") and not filename.startswith("_"):
-                    ext = f"{folder.replace('/', '.')}.{filename[:-3]}"
-                    try:
-                        await self.load_extension(ext)
-                        print(f"  ✅ Cog chargé : {ext}")
-                        loaded += 1
-                    except Exception as e:
-                        print(f"  ❌ Erreur cog {ext} : {e}")
 
-        print(f"\n📦 {loaded} cogs chargés.\n")
+        for cog in cogs:
+            try:
+                await self.load_extension(cog)
+                Logger.success(f"Cog chargé: {cog}")
+            except Exception as e:
+                Logger.error(f"Erreur chargement {cog}: {e}")
 
-        # Sync slash commands
-        synced = await self.tree.sync()
-        print(f"🔄 {len(synced)} commandes slash synchronisées.\n")
+        # Synchroniser les slash commands
+        guild_id = os.getenv("GUILD_ID")
+        if guild_id:
+            guild = discord.Object(id=int(guild_id))
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            Logger.success(f"{len(synced)} commande(s) synchronisée(s) sur le serveur")
+        else:
+            synced = await self.tree.sync()
+            Logger.success(f"{len(synced)} commande(s) synchronisée(s) globalement")
 
     async def on_ready(self):
-        set_bot(self)
-        print("╔══════════════════════════════╗")
-        print("║     OkveHUB Bot v2.0         ║")
-        print(f"║  Connecté : {self.user.name[:16]:<16}  ║")
-        print(f"║  Serveurs : {len(self.guilds):<16}  ║")
-        print("╚══════════════════════════════╝\n")
+        Logger.success("=" * 50)
+        Logger.success(f"  OkveHUB Bot — {self.user}")
+        Logger.success(f"  ID: {self.user.id}")
+        Logger.success(f"  Serveurs: {len(self.guilds)}")
+        Logger.success("=" * 50)
 
-        # Statuts rotatifs
-        self.loop.create_task(self._rotate_status())
+# ══════════════════════════════════
+#     KEEP ALIVE POUR RAILWAY
+# ══════════════════════════════════
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-    async def _rotate_status(self):
-        statuses = [
-            discord.Activity(type=discord.ActivityType.watching, name="OkveHUB 🛒"),
-            discord.Activity(type=discord.ActivityType.playing,  name="/help | OkveHUB"),
-            discord.Activity(type=discord.ActivityType.watching, name="vos scripts 👀"),
-            discord.Activity(type=discord.ActivityType.listening, name="discord.gg/okvehub"),
-        ]
-        i = 0
-        while True:
-            await self.change_presence(activity=statuses[i % len(statuses)], status=discord.Status.online)
-            i += 1
-            await asyncio.sleep(15)
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OkveHUB Bot is alive!")
+    def log_message(self, format, *args):
+        pass  # Silence les logs HTTP
 
-bot = OkveHUB()
+def run_health_server():
+    port = int(os.getenv("PORT", 3000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    Logger.info(f"Health server démarré sur le port {port}")
+    server.serve_forever()
 
-if __name__ == "__main__":
+# ══════════════════════════════════
+#     LANCEMENT
+# ══════════════════════════════════
+async def main():
     token = os.getenv("TOKEN")
     if not token:
-        print("❌ TOKEN manquant dans le fichier .env !")
-        exit(1)
-    bot.run(token)
+        Logger.error("TOKEN manquant dans les variables d'environnement !")
+        Logger.error("Ajoute TOKEN=ton_token dans les variables Railway")
+        return
+
+    bot = OkveHUBBot()
+
+    async with bot:
+        await bot.start(token)
+
+if __name__ == "__main__":
+    # Démarrer le serveur de santé dans un thread séparé
+    health_thread = Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+
+    # Lancer le bot
+    asyncio.run(main())

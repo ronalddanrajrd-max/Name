@@ -1,105 +1,90 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import aiosqlite
-import time
-from utils.helpers import *
-from utils.database import DB_PATH
-
+import random, os
+from Database import db_execute, db_fetchone, db_fetchall
+from Helpers import *
 
 class Levels(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._cooldown = {}
 
-    niveau = app_commands.Group(name="niveau", description="Système de niveaux XP")
+    def xp_for_level(self, level):
+        return 100 * (level ** 2) + 50 * level + 100
 
-    @niveau.command(name="rank", description="Voir ton niveau ou celui d'un membre")
-    async def rank(self, interaction: discord.Interaction, membre: discord.Member = None):
-        user = membre or interaction.user
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM levels WHERE user_id=? AND guild_id=?", (str(user.id), str(interaction.guild.id)))
-            data = await cur.fetchone()
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild: return
+        uid = str(message.author.id)
+        gid = str(message.guild.id)
+        import time
+        now = time.time()
+        key = f"{uid}-{gid}"
+        if key in self._cooldown and now - self._cooldown[key] < 60: return
+        self._cooldown[key] = now
 
-        if not data:
-            return await interaction.response.send_message(embed=embed_info(f"**{user.name}** n'a pas encore d'XP. Écris des messages !"), ephemeral=True)
+        row = await db_fetchone("SELECT * FROM levels WHERE user_id=? AND guild_id=?", (uid, gid))
+        xp_gain = random.randint(15, 30)
+        if not row:
+            await db_execute("INSERT INTO levels (user_id, guild_id, xp, level, messages) VALUES (?,?,?,0,1)", (uid, gid, xp_gain))
+            return
+        new_xp = row["xp"] + xp_gain
+        new_msgs = row["messages"] + 1
+        new_level = row["level"]
+        leveled_up = False
+        while new_xp >= self.xp_for_level(new_level + 1):
+            new_xp -= self.xp_for_level(new_level + 1)
+            new_level += 1
+            leveled_up = True
+        await db_execute("UPDATE levels SET xp=?, level=?, messages=? WHERE user_id=? AND guild_id=?",
+            (new_xp, new_level, new_msgs, uid, gid))
+        if leveled_up:
+            embed = discord.Embed(title="🎉 Level Up !", description=f"{message.author.mention} est maintenant niveau **{new_level}** ! 🚀", color=COLOR_GOLD)
+            await message.channel.send(embed=embed, delete_after=10)
 
-        level = calculate_level(data["xp"])
-        current_xp = xp_for_level(level)
-        next_xp = xp_for_level(level + 1)
-        prog_xp = data["xp"] - current_xp
-        needed = next_xp - current_xp
-        pct = min(100, int((prog_xp / needed) * 100)) if needed > 0 else 100
-
-        bar = progress_bar(pct)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT user_id FROM levels WHERE guild_id=? ORDER BY xp DESC", (str(interaction.guild.id),))
-            all_users = [r[0] for r in await cur.fetchall()]
-        rank = (all_users.index(str(user.id)) + 1) if str(user.id) in all_users else "?"
-
-        embed = discord.Embed(title=f"📊 Niveau — {user.name}", color=Colors.PURPLE)
-        embed.set_thumbnail(url=user.display_avatar.url)
-        embed.add_field(name="🎯 Niveau", value=f"**{level}**", inline=True)
-        embed.add_field(name="⭐ XP Total", value=f"**{data['xp']:,}**", inline=True)
-        embed.add_field(name="🏆 Classement", value=f"**#{rank}**", inline=True)
-        embed.add_field(name="💬 Messages", value=f"**{data['total_messages']:,}**", inline=True)
-        embed.add_field(name=f"Progression → Niveau {level + 1}",
-                        value=f"`{bar}` **{pct}%**\n{prog_xp:,} / {needed:,} XP", inline=False)
-        embed.set_footer(text="OkveHUB • Système de niveaux")
-        embed.timestamp = discord.utils.utcnow()
+    @app_commands.command(name="rank", description="📊 Voir ton niveau XP")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def rank(self, interaction: discord.Interaction, utilisateur: discord.Member = None):
+        target = utilisateur or interaction.user
+        row = await db_fetchone("SELECT * FROM levels WHERE user_id=? AND guild_id=?", (str(target.id), str(interaction.guild_id)))
+        if not row:
+            return await interaction.response.send_message(embed=info_embed("Aucune donnée", f"**{target}** n'a pas encore de niveau."), ephemeral=True)
+        needed = self.xp_for_level(row["level"] + 1)
+        bar_filled = int((row["xp"] / needed) * 20)
+        bar = "█" * bar_filled + "░" * (20 - bar_filled)
+        embed = discord.Embed(title=f"📊 Rang de {target}", color=target.color or COLOR_MAIN, timestamp=discord.utils.utcnow())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.add_field(name="⭐ Niveau", value=f"`{row['level']}`", inline=True)
+        embed.add_field(name="✨ XP", value=f"`{row['xp']}/{needed}`", inline=True)
+        embed.add_field(name="💬 Messages", value=f"`{row['messages']}`", inline=True)
+        embed.add_field(name="📈 Progression", value=f"`{bar}` {int(row['xp']/needed*100)}%", inline=False)
         await interaction.response.send_message(embed=embed)
 
-    @niveau.command(name="top", description="Classement XP du serveur")
-    async def top(self, interaction: discord.Interaction, page: app_commands.Range[int, 1, 20] = 1):
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM levels WHERE guild_id=? ORDER BY xp DESC", (str(interaction.guild.id),))
-            all_rows = await cur.fetchall()
-
-        per_page = 10
-        pages = max(1, -(-len(all_rows) // per_page))
-        page = min(page, pages)
-        items = paginate(list(all_rows), per_page, page - 1)
-
-        medals = ["🥇", "🥈", "🥉"]
-        desc = "\n".join(
-            f"{medals[i] if (page-1)*per_page+i < 3 else f'`{(page-1)*per_page+i+1}.`'} "
-            f"<@{r['user_id']}> — **Niveau {calculate_level(r['xp'])}** • {r['xp']:,} XP"
-            for i, r in enumerate(items)
-        ) or "*Aucun membre classé.*"
-
-        embed = discord.Embed(title=f"🏆 Classement XP — {interaction.guild.name}", description=desc, color=Colors.GOLD)
-        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
-        embed.set_footer(text=f"Page {page}/{pages} • {len(all_rows)} membres classés")
-        embed.timestamp = discord.utils.utcnow()
+    @app_commands.command(name="leaderboard", description="🏆 Classement XP du serveur")
+    async def leaderboard(self, interaction: discord.Interaction):
+        rows = await db_fetchall("SELECT * FROM levels WHERE guild_id=? ORDER BY level DESC, xp DESC LIMIT 10", (str(interaction.guild_id),))
+        if not rows:
+            return await interaction.response.send_message(embed=info_embed("Vide", "Aucune donnée de niveau."), ephemeral=True)
+        medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+        lines = []
+        for i, r in enumerate(rows):
+            user = interaction.guild.get_member(int(r["user_id"]))
+            name = user.display_name if user else f"Utilisateur inconnu"
+            lines.append(f"{medals[i]} **{name}** — Niveau `{r['level']}` — `{r['xp']} XP`")
+        embed = discord.Embed(title="🏆 Classement OkveHUB", description="\n".join(lines), color=COLOR_GOLD, timestamp=discord.utils.utcnow())
         await interaction.response.send_message(embed=embed)
 
-    @niveau.command(name="setxp", description="Définir l'XP d'un membre (Admin)")
-    @app_commands.default_permissions(administrator=True)
-    async def setxp(self, interaction: discord.Interaction, membre: discord.Member, xp: app_commands.Range[int, 0, 9999999]):
-        if not is_admin(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        level = calculate_level(xp)
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-                INSERT INTO levels (user_id,guild_id,xp,level,total_messages,last_message) VALUES (?,?,?,?,0,0)
-                ON CONFLICT(user_id,guild_id) DO UPDATE SET xp=?, level=?
-            """, (str(membre.id), str(interaction.guild.id), xp, level, xp, level))
-            await db.commit()
-        await interaction.response.send_message(embed=embed_success(f"✅ XP de **{membre}** défini à **{xp:,}** (Niveau **{level}**)."))
-
-    @niveau.command(name="reset", description="Réinitialiser l'XP d'un membre (Admin)")
-    @app_commands.default_permissions(administrator=True)
-    async def reset(self, interaction: discord.Interaction, membre: discord.Member):
-        if not is_admin(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("UPDATE levels SET xp=0, level=0, total_messages=0 WHERE user_id=? AND guild_id=?",
-                             (str(membre.id), str(interaction.guild.id)))
-            await db.commit()
-        await interaction.response.send_message(embed=embed_success(f"✅ XP de **{membre}** réinitialisé."))
-
+    @app_commands.command(name="xp-add", description="➕ Ajouter de l'XP à un utilisateur")
+    @app_commands.describe(utilisateur="Utilisateur", quantite="Quantité d'XP")
+    async def xp_add(self, interaction: discord.Interaction, utilisateur: discord.Member, quantite: int):
+        if not await check_permission(interaction, "admin"): return
+        row = await db_fetchone("SELECT * FROM levels WHERE user_id=? AND guild_id=?", (str(utilisateur.id), str(interaction.guild_id)))
+        if not row:
+            await db_execute("INSERT INTO levels (user_id, guild_id, xp, level, messages) VALUES (?,?,?,0,0)", (str(utilisateur.id), str(interaction.guild_id), quantite))
+        else:
+            await db_execute("UPDATE levels SET xp=xp+? WHERE user_id=? AND guild_id=?", (quantite, str(utilisateur.id), str(interaction.guild_id)))
+        await interaction.response.send_message(embed=success_embed("XP Ajouté", f"**{quantite} XP** ajouté à {utilisateur.mention}."))
 
 async def setup(bot):
     await bot.add_cog(Levels(bot))

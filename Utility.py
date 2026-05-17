@@ -1,182 +1,139 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import aiosqlite
-import time
-from utils.helpers import *
-from utils.database import DB_PATH
-
+import os
+from Database import db_execute, db_fetchone, db_fetchall
+from Helpers import *
 
 class Utility(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ───── HELP ─────
-    @app_commands.command(name="help", description="Liste toutes les commandes du bot")
-    async def help(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="📚 OkveHUB Bot — Commandes",
-            description="Bot de gestion complet pour **OkveHUB**",
-            color=Colors.MAIN
-        )
-        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
-
-        embed.add_field(name="🔨 Modération", value="`/ban` `/unban` `/kick` `/mute` `/unmute` `/warn` `/infractions` `/clearwarn` `/purge` `/lock` `/unlock` `/slowmode` `/nickname`", inline=False)
-        embed.add_field(name="✅ Whitelist", value="`/whitelist add` `/whitelist remove` `/whitelist check` `/whitelist list` `/whitelist search`", inline=False)
-        embed.add_field(name="🎫 Tickets", value="`/ticket panel` `/ticket open` `/ticket close` `/ticket add` `/ticket remove` `/ticket list`", inline=False)
-        embed.add_field(name="🎉 Giveaway", value="`/giveaway create` `/giveaway end` `/giveaway reroll` `/giveaway list`", inline=False)
-        embed.add_field(name="📊 Niveaux", value="`/niveau rank` `/niveau top` `/niveau setxp` `/niveau reset`", inline=False)
-        embed.add_field(name="📢 Annonces", value="`/annonce envoyer` `/annonce update` `/annonce promo` `/annonce dm` `/annonce embed_simple`", inline=False)
-        embed.add_field(name="🔧 Automod", value="`/automod config` `/automod status` `/automod motsbanni`", inline=False)
-        embed.add_field(name="🛠️ Utilitaire", value="`/help` `/ping` `/avatar` `/banner` `/tag` `/reminder` `/suggestion` `/userinfo` `/serverinfo` `/roleinfo` `/note`", inline=False)
-        embed.add_field(name="🎮 Admin", value="`/admin embed` `/admin role` `/admin say` `/admin blacklist` `/admin config`", inline=False)
-
-        embed.set_footer(text=f"OkveHUB Bot • {len(self.bot.tree.get_commands())} commandes")
-        embed.timestamp = discord.utils.utcnow()
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ───── PING ─────
-    @app_commands.command(name="ping", description="Voir la latence du bot")
-    async def ping(self, interaction: discord.Interaction):
-        ws_lat = round(self.bot.latency * 1000)
-        embed = discord.Embed(title="🏓 Pong !", color=Colors.SUCCESS)
-        embed.add_field(name="🌐 WebSocket", value=f"**{ws_lat}ms**", inline=True)
-        color = Colors.SUCCESS if ws_lat < 100 else Colors.WARNING if ws_lat < 200 else Colors.ERROR
-        embed.color = color
-        await interaction.response.send_message(embed=embed)
-
-    # ───── AVATAR ─────
-    @app_commands.command(name="avatar", description="Voir l'avatar d'un membre")
-    async def avatar(self, interaction: discord.Interaction, membre: discord.Member = None):
-        user = membre or interaction.user
-        embed = discord.Embed(title=f"🖼️ Avatar — {user.name}", color=Colors.MAIN)
-        embed.set_image(url=user.display_avatar.url)
-        embed.add_field(name="Liens", value=f"[PNG]({user.display_avatar.with_format('png').url}) | [JPG]({user.display_avatar.with_format('jpeg').url}) | [WEBP]({user.display_avatar.url})")
-        await interaction.response.send_message(embed=embed)
-
-    # ───── BANNER ─────
-    @app_commands.command(name="banner", description="Voir la bannière d'un membre")
-    async def banner(self, interaction: discord.Interaction, membre: discord.Member = None):
-        user = membre or interaction.user
-        fetched = await self.bot.fetch_user(user.id)
-        if not fetched.banner:
-            return await interaction.response.send_message(embed=embed_info(f"**{user.name}** n'a pas de bannière."), ephemeral=True)
-        embed = discord.Embed(title=f"🎨 Bannière — {user.name}", color=Colors.MAIN)
-        embed.set_image(url=fetched.banner.url)
-        await interaction.response.send_message(embed=embed)
-
-    # ───── TAG ─────
-    tag_group = app_commands.Group(name="tag", description="Tags / réponses personnalisées")
-
-    @tag_group.command(name="create", description="Créer un tag")
-    @app_commands.default_permissions(manage_messages=True)
-    async def tag_create(self, interaction: discord.Interaction, nom: str, contenu: str):
-        if not is_staff(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        async with aiosqlite.connect(DB_PATH) as db:
-            try:
-                await db.execute("INSERT INTO tags (guild_id,name,content,author_id,created_at) VALUES (?,?,?,?,?)",
-                                 (str(interaction.guild.id), nom.lower(), contenu, str(interaction.user.id), int(time.time())))
-                await db.commit()
-                await interaction.response.send_message(embed=embed_success(f"✅ Tag `{nom}` créé."))
-            except Exception:
-                await interaction.response.send_message(embed=embed_error(f"Un tag `{nom}` existe déjà."), ephemeral=True)
-
-    @tag_group.command(name="get", description="Afficher un tag")
-    async def tag_get(self, interaction: discord.Interaction, nom: str):
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM tags WHERE guild_id=? AND name=?", (str(interaction.guild.id), nom.lower()))
-            tag = await cur.fetchone()
-        if not tag:
-            return await interaction.response.send_message(embed=embed_error(f"Tag `{nom}` introuvable."), ephemeral=True)
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("UPDATE tags SET uses=uses+1 WHERE guild_id=? AND name=?", (str(interaction.guild.id), nom.lower()))
-            await db.commit()
-        embed = discord.Embed(description=tag["content"], color=Colors.MAIN)
-        embed.set_footer(text=f"Tag: {nom} • {tag['uses']+1} utilisations")
-        await interaction.response.send_message(embed=embed)
-
-    @tag_group.command(name="list", description="Voir tous les tags du serveur")
-    async def tag_list(self, interaction: discord.Interaction):
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT name, uses FROM tags WHERE guild_id=? ORDER BY uses DESC", (str(interaction.guild.id),))
-            rows = await cur.fetchall()
-        if not rows:
-            return await interaction.response.send_message(embed=embed_info("Aucun tag créé."), ephemeral=True)
-        desc = "\n".join(f"`{r['name']}` — {r['uses']} utilisations" for r in rows[:25])
-        embed = discord.Embed(title=f"🏷️ Tags ({len(rows)})", description=desc, color=Colors.MAIN)
-        await interaction.response.send_message(embed=embed)
-
-    @tag_group.command(name="delete", description="Supprimer un tag")
-    @app_commands.default_permissions(manage_messages=True)
-    async def tag_delete(self, interaction: discord.Interaction, nom: str):
-        if not is_staff(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("DELETE FROM tags WHERE guild_id=? AND name=?", (str(interaction.guild.id), nom.lower()))
-            await db.commit()
-        await interaction.response.send_message(embed=embed_success(f"✅ Tag `{nom}` supprimé."))
-
-    # ───── REMINDER ─────
-    remind_group = app_commands.Group(name="reminder", description="Rappels")
-
-    @remind_group.command(name="set", description="Créer un rappel")
-    async def remind_set(self, interaction: discord.Interaction, duree: str, message: str):
-        secs = parse_duration(duree)
-        if secs <= 0:
-            return await interaction.response.send_message(embed=embed_error("Durée invalide. Ex: `30m`, `1h`"), ephemeral=True)
-        remind_at = int(time.time()) + secs
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT INTO reminders (user_id,channel_id,content,remind_at,created_at) VALUES (?,?,?,?,?)",
-                             (str(interaction.user.id), str(interaction.channel.id), message, remind_at, int(time.time())))
-            await db.commit()
-        embed = embed_success(f"⏰ Rappel créé !\n**Message :** {message}\n**Dans :** {format_duration(secs)} ({dt(remind_at, 'F')})")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @remind_group.command(name="list", description="Voir tes rappels")
-    async def remind_list(self, interaction: discord.Interaction):
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM reminders WHERE user_id=? AND sent=0 ORDER BY remind_at ASC", (str(interaction.user.id),))
-            rows = await cur.fetchall()
-        if not rows:
-            return await interaction.response.send_message(embed=embed_info("Aucun rappel actif."), ephemeral=True)
-        desc = "\n".join(f"`#{r['id']}` {dt(r['remind_at'], 'R')} — {truncate(r['content'], 80)}" for r in rows)
-        embed = discord.Embed(title=f"⏰ Tes rappels ({len(rows)})", description=desc, color=Colors.INFO)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ───── SUGGESTION ─────
-    @app_commands.command(name="suggestion", description="Faire une suggestion")
-    async def suggestion(self, interaction: discord.Interaction, contenu: str):
-        ch_id = os.getenv("CHANNEL_SUGGESTIONS") if hasattr(self, '_env_imported') else None
-        import os
+    # ══════════ /suggestion ══════════
+    @app_commands.command(name="suggestion", description="💡 Faire une suggestion pour OkveHUB")
+    @app_commands.describe(suggestion="Ta suggestion")
+    async def suggestion(self, interaction: discord.Interaction, suggestion: str):
         ch_id = os.getenv("CHANNEL_SUGGESTIONS")
+        if not ch_id:
+            return await interaction.response.send_message(embed=error_embed("Config", "Salon de suggestions non configuré."), ephemeral=True)
+        channel = self.bot.get_channel(int(ch_id))
+        if not channel:
+            return await interaction.response.send_message(embed=error_embed("Config", "Salon de suggestions introuvable."), ephemeral=True)
 
-        embed = discord.Embed(title="💡 Nouvelle suggestion", description=contenu, color=Colors.PURPLE)
+        embed = discord.Embed(title="💡 Nouvelle Suggestion", description=suggestion, color=COLOR_INFO, timestamp=discord.utils.utcnow())
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="Statut", value="⏳ En attente")
-        embed.timestamp = discord.utils.utcnow()
+        embed.add_field(name="📊 Statut", value="⏳ En attente", inline=True)
+        embed.set_footer(text=f"ID: {interaction.user.id}")
 
-        target_ch = None
+        msg = await channel.send(embed=embed)
+        await msg.add_reaction("👍")
+        await msg.add_reaction("👎")
+        await db_execute("INSERT INTO suggestions (user_id, message_id, content) VALUES (?,?,?)",
+            (str(interaction.user.id), str(msg.id), suggestion))
+        await interaction.response.send_message(embed=success_embed("Suggestion Envoyée !", f"Ta suggestion a été envoyée dans {channel.mention} !"), ephemeral=True)
+
+    # ══════════ /suggestion-approve ══════════
+    @app_commands.command(name="suggestion-approve", description="✅ Approuver une suggestion")
+    @app_commands.describe(message_id="ID du message", reponse="Commentaire")
+    async def suggestion_approve(self, interaction: discord.Interaction, message_id: str, reponse: str = "Approuvée !"):
+        if not await check_permission(interaction, "admin"): return
+        sugg = await db_fetchone("SELECT * FROM suggestions WHERE message_id=?", (message_id,))
+        if not sugg:
+            return await interaction.response.send_message(embed=error_embed("Introuvable", "Suggestion non trouvée."), ephemeral=True)
+        await db_execute("UPDATE suggestions SET status='approved', staff_id=?, response=? WHERE message_id=?",
+            (str(interaction.user.id), reponse, message_id))
+        ch_id = os.getenv("CHANNEL_SUGGESTIONS")
         if ch_id:
-            target_ch = interaction.guild.get_channel(int(ch_id))
+            channel = self.bot.get_channel(int(ch_id))
+            if channel:
+                try:
+                    msg = await channel.fetch_message(int(message_id))
+                    embed = msg.embeds[0]
+                    embed.color = COLOR_SUCCESS
+                    for i, field in enumerate(embed.fields):
+                        if field.name == "📊 Statut":
+                            embed.set_field_at(i, name="📊 Statut", value="✅ Approuvée", inline=True)
+                    embed.add_field(name=f"✅ Réponse de {interaction.user}", value=reponse, inline=False)
+                    await msg.edit(embed=embed)
+                except: pass
+        await interaction.response.send_message(embed=success_embed("Suggestion Approuvée", "La suggestion a été approuvée."), ephemeral=True)
 
-        ch = target_ch or interaction.channel
-        msg = await ch.send(embed=embed)
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
+    # ══════════ /suggestion-deny ══════════
+    @app_commands.command(name="suggestion-deny", description="❌ Refuser une suggestion")
+    @app_commands.describe(message_id="ID du message", raison="Raison du refus")
+    async def suggestion_deny(self, interaction: discord.Interaction, message_id: str, raison: str):
+        if not await check_permission(interaction, "admin"): return
+        sugg = await db_fetchone("SELECT * FROM suggestions WHERE message_id=?", (message_id,))
+        if not sugg:
+            return await interaction.response.send_message(embed=error_embed("Introuvable", "Suggestion non trouvée."), ephemeral=True)
+        await db_execute("UPDATE suggestions SET status='denied', staff_id=?, response=? WHERE message_id=?",
+            (str(interaction.user.id), raison, message_id))
+        ch_id = os.getenv("CHANNEL_SUGGESTIONS")
+        if ch_id:
+            channel = self.bot.get_channel(int(ch_id))
+            if channel:
+                try:
+                    msg = await channel.fetch_message(int(message_id))
+                    embed = msg.embeds[0]
+                    embed.color = COLOR_ERROR
+                    for i, field in enumerate(embed.fields):
+                        if field.name == "📊 Statut":
+                            embed.set_field_at(i, name="📊 Statut", value="❌ Refusée", inline=True)
+                    embed.add_field(name=f"❌ Refus de {interaction.user}", value=raison, inline=False)
+                    await msg.edit(embed=embed)
+                except: pass
+        await interaction.response.send_message(embed=success_embed("Suggestion Refusée", "La suggestion a été refusée."), ephemeral=True)
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT INTO suggestions (user_id,guild_id,message_id,content,created_at) VALUES (?,?,?,?,?)",
-                             (str(interaction.user.id), str(interaction.guild.id), str(msg.id), contenu, int(time.time())))
-            await db.commit()
+    # ══════════ /note-add ══════════
+    @app_commands.command(name="note-add", description="📝 Ajouter une note sur un utilisateur")
+    @app_commands.describe(utilisateur="Utilisateur", note="Contenu de la note")
+    async def note_add(self, interaction: discord.Interaction, utilisateur: discord.Member, note: str):
+        if not await check_permission(interaction, "staff"): return
+        await db_execute("INSERT INTO notes (user_id, note, added_by) VALUES (?,?,?)",
+            (str(utilisateur.id), note, str(interaction.user.id)))
+        await interaction.response.send_message(embed=success_embed("Note Ajoutée", f"Note ajoutée pour **{utilisateur}**."), ephemeral=True)
 
-        await interaction.response.send_message(embed=embed_success("💡 Suggestion envoyée !"), ephemeral=True)
+    # ══════════ /note-list ══════════
+    @app_commands.command(name="note-list", description="📝 Voir les notes d'un utilisateur")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def note_list(self, interaction: discord.Interaction, utilisateur: discord.Member):
+        if not await check_permission(interaction, "staff"): return
+        rows = await db_fetchall("SELECT * FROM notes WHERE user_id=? ORDER BY created_at DESC", (str(utilisateur.id),))
+        if not rows:
+            return await interaction.response.send_message(embed=info_embed("Aucune note", f"Aucune note pour **{utilisateur}**."), ephemeral=True)
+        embed = discord.Embed(title=f"📝 Notes — {utilisateur}", color=COLOR_INFO, timestamp=discord.utils.utcnow())
+        embed.description = "\n\n".join(f"**#{r['id']}** <t:{r['created_at']}:d> par <@{r['added_by']}>\n└ {r['note']}" for r in rows)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # ══════════ /note-delete ══════════
+    @app_commands.command(name="note-delete", description="🗑️ Supprimer une note")
+    @app_commands.describe(id="ID de la note")
+    async def note_delete(self, interaction: discord.Interaction, id: int):
+        if not await check_permission(interaction, "staff"): return
+        await db_execute("DELETE FROM notes WHERE id=?", (id,))
+        await interaction.response.send_message(embed=success_embed("Note Supprimée", f"Note `#{id}` supprimée."), ephemeral=True)
 
-import os
+    # ══════════ /reactionrole ══════════
+    @app_commands.command(name="reactionrole", description="🎭 Créer un rôle réaction")
+    @app_commands.describe(message_id="ID du message", emoji="Emoji", role="Rôle à donner")
+    async def reactionrole(self, interaction: discord.Interaction, message_id: str, emoji: str, role: discord.Role):
+        if not await check_permission(interaction, "admin"): return
+        try:
+            msg = await interaction.channel.fetch_message(int(message_id))
+            await msg.add_reaction(emoji)
+        except:
+            return await interaction.response.send_message(embed=error_embed("Erreur", "Message introuvable ou emoji invalide."), ephemeral=True)
+        await db_execute("INSERT OR IGNORE INTO reaction_roles (message_id, channel_id, emoji, role_id) VALUES (?,?,?,?)",
+            (message_id, str(interaction.channel_id), emoji, str(role.id)))
+        await interaction.response.send_message(embed=success_embed("Rôle Réaction Créé", f"L'emoji {emoji} donnera le rôle {role.mention}."), ephemeral=True)
+
+    # ══════════ /clear-cache ══════════
+    @app_commands.command(name="clear-cache", description="🗑️ Vider les données expirées de la whitelist")
+    async def clear_cache(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, "admin"): return
+        await db_execute("DELETE FROM whitelist WHERE expires_at IS NOT NULL AND expires_at < strftime('%s','now')", ())
+        await db_execute("DELETE FROM antispam WHERE last_message < strftime('%s','now') - 3600", ()) if False else None
+        await interaction.response.send_message(embed=success_embed("Cache Nettoyé", "Les entrées expirées ont été supprimées."), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Utility(bot))

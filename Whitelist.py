@@ -1,225 +1,206 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import aiosqlite
 import time
-import json
 import os
-from utils.helpers import *
-from utils.logger import send_log
-from utils.database import DB_PATH
-
+from Database import db_execute, db_fetchone, db_fetchall
+from Helpers import *
 
 class Whitelist(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    wl = app_commands.Group(name="whitelist", description="Gestion de la whitelist OkveHUB")
+    # ══════════ /wl-add ══════════
+    @app_commands.command(name="wl-add", description="➕ Ajouter un utilisateur à la whitelist OkveHUB")
+    @app_commands.describe(utilisateur="Utilisateur à whitelister", raison="Raison", scripts="Scripts accessibles (ex: all)", duree="Durée (ex: 30d, permanent)", hwid="HWID de la machine")
+    async def wl_add(self, interaction: discord.Interaction, utilisateur: discord.Member, raison: str, scripts: str = "all", duree: str = "permanent", hwid: str = None):
+        if not await check_permission(interaction, "staff"): return
 
-    # ───── ADD ─────
-    @wl.command(name="add", description="Ajouter un membre à la whitelist")
-    @app_commands.describe(
-        membre="Membre à whitelister",
-        script="Nom du script acheté",
-        raison="Raison de l'ajout",
-        duree="Durée (ex: 30d, 6m) — vide = permanent"
-    )
-    async def wl_add(self, interaction: discord.Interaction,
-                     membre: discord.Member,
-                     script: str = "Global",
-                     raison: str = "Achat de script",
-                     duree: str = None):
-
-        if not is_mod(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Tu dois être **Modérateur** pour faire ça."), ephemeral=True)
+        bl = await db_fetchone("SELECT user_id FROM blacklist WHERE user_id=?", (str(utilisateur.id),))
+        if bl:
+            return await interaction.response.send_message(embed=error_embed("Utilisateur blacklisté", f"**{utilisateur}** est blacklisté. Retirez-le d'abord avec `/bl-remove`."), ephemeral=True)
 
         expires_at = None
-        duree_display = "Permanent"
-        if duree:
+        if duree and duree != "permanent":
             secs = parse_duration(duree)
-            if secs <= 0:
-                return await interaction.response.send_message(embed=embed_error("Durée invalide. Ex: `30d`, `6m`, `1y`"), ephemeral=True)
-            expires_at = int(time.time()) + secs
-            duree_display = format_duration(secs)
+            if not secs:
+                return await interaction.response.send_message(embed=error_embed("Durée invalide", "Format: `30d`, `1w`, `6h`, `permanent`"), ephemeral=True)
+            expires_at = now_ts() + secs
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            row = await db.execute("SELECT user_id FROM whitelist WHERE user_id = ?", (str(membre.id),))
-            if await row.fetchone():
-                return await interaction.response.send_message(embed=embed_warning(f"{membre.mention} est **déjà** dans la whitelist."), ephemeral=True)
+        await db_execute("""
+            INSERT INTO whitelist (user_id, username, added_by, reason, hwid, script_access, expires_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username, added_by=excluded.added_by,
+                reason=excluded.reason, hwid=excluded.hwid,
+                script_access=excluded.script_access, expires_at=excluded.expires_at
+        """, (str(utilisateur.id), str(utilisateur), str(interaction.user.id), raison, hwid, scripts, expires_at))
 
-            await db.execute(
-                "INSERT INTO whitelist VALUES (?,?,?,?,?,?)",
-                (str(membre.id), str(interaction.user.id), int(time.time()), raison, script, expires_at)
-            )
-            await db.commit()
+        role_id = os.getenv("ROLE_WHITELIST")
+        if role_id:
+            role = interaction.guild.get_role(int(role_id))
+            if role: await utilisateur.add_roles(role)
 
-        # Donner les rôles
-        for role_env in ["ROLE_WHITELIST", "ROLE_ACHETEUR"]:
-            role_id = os.getenv(role_env)
-            if role_id:
-                role = interaction.guild.get_role(int(role_id))
-                if role:
-                    await membre.add_roles(role, reason="Whitelist ajout")
-
-        embed = discord.Embed(title="✅ Whitelist — Accès accordé", color=Colors.SUCCESS)
-        embed.set_thumbnail(url=membre.display_avatar.url)
-        embed.add_field(name="👤 Membre", value=f"{membre.mention} (`{membre.id}`)", inline=True)
-        embed.add_field(name="🛒 Script", value=script, inline=True)
-        embed.add_field(name="👮 Ajouté par", value=interaction.user.mention, inline=True)
-        embed.add_field(name="⏰ Expire", value=dt(expires_at) if expires_at else "**Jamais**", inline=True)
+        embed = discord.Embed(title="🔐 Whitelist Ajoutée", color=COLOR_WL, timestamp=discord.utils.utcnow())
+        embed.set_thumbnail(url=utilisateur.display_avatar.url)
+        embed.add_field(name="👤 Utilisateur", value=f"{utilisateur.mention} `{utilisateur}`", inline=True)
+        embed.add_field(name="🛡️ Ajouté par", value=interaction.user.mention, inline=True)
         embed.add_field(name="📝 Raison", value=raison, inline=False)
-        embed.timestamp = discord.utils.utcnow()
+        embed.add_field(name="📜 Scripts", value=scripts, inline=True)
+        embed.add_field(name="⏰ Expiration", value=f"<t:{expires_at}:F>" if expires_at else "∞ Permanent", inline=True)
+        embed.add_field(name="🔑 HWID", value=f"`{hwid}`" if hwid else "Non défini", inline=False)
 
         await interaction.response.send_message(embed=embed)
+        await send_log(self.bot, "CHANNEL_LOGS_WHITELIST", embed)
 
-        # DM au membre
-        try:
-            dm_embed = discord.Embed(
-                title="🎉 Whitelist OkveHUB — Accès accordé !",
-                description=f"Tu as été ajouté à la whitelist de **OkveHUB** !\n\n**Script :** {script}\n**Expire :** {dt(expires_at) if expires_at else 'Jamais'}",
-                color=Colors.SUCCESS
-            )
-            dm_embed.set_footer(text="Merci pour ton achat !")
-            await membre.send(embed=dm_embed)
-        except Exception:
-            pass
+    # ══════════ /wl-remove ══════════
+    @app_commands.command(name="wl-remove", description="➖ Retirer de la whitelist")
+    @app_commands.describe(utilisateur="Utilisateur", raison="Raison")
+    async def wl_remove(self, interaction: discord.Interaction, utilisateur: discord.Member, raison: str = "Aucune raison"):
+        if not await check_permission(interaction, "staff"): return
 
-        await send_log("WHITELIST_ADD", fields=[
-            {"name": "Membre", "value": f"{membre} ({membre.id})", "inline": True},
-            {"name": "Script", "value": script, "inline": True},
-            {"name": "Staff", "value": str(interaction.user), "inline": True},
-            {"name": "Expire", "value": dt(expires_at) if expires_at else "Permanent", "inline": True},
-        ])
+        entry = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
+        if not entry:
+            return await interaction.response.send_message(embed=error_embed("Non whitelisté", f"**{utilisateur}** n'est pas dans la whitelist."), ephemeral=True)
 
-    # ───── REMOVE ─────
-    @wl.command(name="remove", description="Retirer un membre de la whitelist")
-    @app_commands.describe(membre="Membre à retirer", raison="Raison")
-    async def wl_remove(self, interaction: discord.Interaction,
-                        membre: discord.Member,
-                        raison: str = "Aucune raison"):
+        await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
 
-        if not is_mod(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
+        role_id = os.getenv("ROLE_WHITELIST")
+        if role_id:
+            role = interaction.guild.get_role(int(role_id))
+            if role: await utilisateur.remove_roles(role)
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            row = await db.execute("SELECT user_id FROM whitelist WHERE user_id = ?", (str(membre.id),))
-            if not await row.fetchone():
-                return await interaction.response.send_message(embed=embed_error(f"{membre.mention} n'est pas dans la whitelist."), ephemeral=True)
-            await db.execute("DELETE FROM whitelist WHERE user_id = ?", (str(membre.id),))
-            await db.commit()
-
-        # Retirer les rôles
-        for role_env in ["ROLE_WHITELIST", "ROLE_ACHETEUR"]:
-            role_id = os.getenv(role_env)
-            if role_id:
-                role = interaction.guild.get_role(int(role_id))
-                if role and role in membre.roles:
-                    await membre.remove_roles(role, reason="Whitelist retrait")
-
-        await interaction.response.send_message(embed=embed_success(f"{membre.mention} retiré de la whitelist.\n**Raison :** {raison}"))
-
-        try:
-            dm = discord.Embed(title="❌ Whitelist OkveHUB — Accès retiré",
-                               description=f"Ton accès whitelist a été retiré.\n**Raison :** {raison}",
-                               color=Colors.ERROR)
-            await membre.send(embed=dm)
-        except Exception:
-            pass
-
-        await send_log("WHITELIST_REMOVE", fields=[
-            {"name": "Membre", "value": f"{membre} ({membre.id})", "inline": True},
-            {"name": "Staff", "value": str(interaction.user), "inline": True},
-            {"name": "Raison", "value": raison, "inline": False},
-        ])
-
-    # ───── CHECK ─────
-    @wl.command(name="check", description="Vérifier si un membre est whitelisté")
-    @app_commands.describe(membre="Membre à vérifier")
-    async def wl_check(self, interaction: discord.Interaction, membre: discord.Member):
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM whitelist WHERE user_id = ?", (str(membre.id),))
-            row = await cur.fetchone()
-
-        if not row:
-            embed = discord.Embed(title="❌ Non whitelisté",
-                                  description=f"{membre.mention} n'est **pas** dans la whitelist OkveHUB.",
-                                  color=Colors.ERROR)
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        now = int(time.time())
-        expired = row["expires_at"] and row["expires_at"] < now
-        color = Colors.ERROR if expired else Colors.SUCCESS
-
-        embed = discord.Embed(title="⚠️ Whitelist expirée" if expired else "✅ Whitelisté", color=color)
-        embed.set_thumbnail(url=membre.display_avatar.url)
-        embed.add_field(name="👤 Membre", value=str(membre), inline=True)
-        embed.add_field(name="🛒 Script", value=row["script"], inline=True)
-        embed.add_field(name="👮 Ajouté par", value=f"<@{row['added_by']}>", inline=True)
-        embed.add_field(name="📅 Ajouté le", value=dt(row["added_at"], "D"), inline=True)
-        embed.add_field(name="⏰ Expire", value=dt(row["expires_at"]) if row["expires_at"] else "**Jamais**", inline=True)
-        embed.add_field(name="📝 Raison", value=row["reason"], inline=False)
-        embed.timestamp = discord.utils.utcnow()
+        embed = success_embed("Whitelist Retirée", f"**{utilisateur}** retiré de la whitelist.\n**Raison:** {raison}")
         await interaction.response.send_message(embed=embed)
+        await send_log(self.bot, "CHANNEL_LOGS_WHITELIST", embed)
 
-    # ───── LIST ─────
-    @wl.command(name="list", description="Voir tous les membres whitelistés")
-    @app_commands.describe(page="Numéro de page")
-    async def wl_list(self, interaction: discord.Interaction, page: int = 1):
-        if not is_mod(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
+    # ══════════ /wl-check ══════════
+    @app_commands.command(name="wl-check", description="🔍 Vérifier la whitelist d'un utilisateur")
+    @app_commands.describe(utilisateur="Utilisateur (laisse vide pour toi)")
+    async def wl_check(self, interaction: discord.Interaction, utilisateur: discord.Member = None):
+        target = utilisateur or interaction.user
+        entry = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(target.id),))
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM whitelist ORDER BY added_at DESC")
-            all_rows = await cur.fetchall()
+        if not entry:
+            return await interaction.response.send_message(embed=error_embed("Non whitelisté", f"**{target}** n'est pas dans la whitelist OkveHUB."), ephemeral=True)
 
-        per_page = 10
-        pages = max(1, -(-len(all_rows) // per_page))
-        page = max(1, min(page, pages))
-        items = paginate(all_rows, per_page, page - 1)
+        expired = entry["expires_at"] and entry["expires_at"] < now_ts()
+        embed = discord.Embed(
+            title="🔐 Whitelist Expirée" if expired else "🔐 Whitelist Active",
+            color=COLOR_ERROR if expired else COLOR_WL,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.add_field(name="👤 Utilisateur", value=f"{target.mention} `{target}`", inline=True)
+        embed.add_field(name="📊 Statut", value="❌ Expirée" if expired else "✅ Active", inline=True)
+        embed.add_field(name="📜 Scripts", value=entry["script_access"] or "Tous", inline=True)
+        embed.add_field(name="🔑 HWID", value=f"`{entry['hwid']}`" if entry["hwid"] else "Non défini", inline=False)
+        embed.add_field(name="📅 Ajouté le", value=f"<t:{entry['created_at']}:F>", inline=True)
+        embed.add_field(name="⏰ Expire", value=f"<t:{entry['expires_at']}:F>" if entry["expires_at"] else "∞ Permanent", inline=True)
+        embed.add_field(name="🛡️ Par", value=f"<@{entry['added_by']}>", inline=True)
+        embed.add_field(name="📝 Raison", value=entry["reason"] or "N/A", inline=False)
 
-        now = int(time.time())
-        if not items:
-            desc = "*Aucun membre whitelisté.*"
-        else:
-            desc = "\n".join(
-                f"`{(page-1)*per_page + i + 1}.` <@{r['user_id']}> — **{r['script']}** "
-                f"{'⚠️ *Expiré*' if r['expires_at'] and r['expires_at'] < now else '✅'}"
-                for i, r in enumerate(items)
-            )
-
-        embed = discord.Embed(title=f"📋 Whitelist OkveHUB ({len(all_rows)} membres)", description=desc, color=Colors.MAIN)
-        embed.set_footer(text=f"Page {page}/{pages}")
-        embed.timestamp = discord.utils.utcnow()
-        await interaction.response.send_message(embed=embed)
-
-    # ───── SEARCH ─────
-    @wl.command(name="search", description="Chercher un membre dans la whitelist par nom ou ID")
-    @app_commands.describe(query="Nom d'utilisateur ou ID")
-    async def wl_search(self, interaction: discord.Interaction, query: str):
-        if not is_mod(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM whitelist")
-            all_rows = await cur.fetchall()
-
-        matches = []
-        for r in all_rows:
-            member = interaction.guild.get_member(int(r["user_id"]))
-            name = str(member) if member else r["user_id"]
-            if query.lower() in name.lower() or query == r["user_id"]:
-                matches.append((r, member, name))
-
-        if not matches:
-            return await interaction.response.send_message(embed=embed_error(f"Aucun résultat pour `{query}`."), ephemeral=True)
-
-        desc = "\n".join(f"<@{r['user_id']}> — **{r['script']}**" for r, _, _ in matches[:10])
-        embed = discord.Embed(title=f"🔍 Résultats ({len(matches)})", description=desc, color=Colors.INFO)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # ══════════ /wl-list ══════════
+    @app_commands.command(name="wl-list", description="📋 Lister tous les whitelistés")
+    async def wl_list(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, "staff"): return
+
+        rows = await db_fetchall("SELECT * FROM whitelist ORDER BY created_at DESC")
+        if not rows:
+            return await interaction.response.send_message(embed=info_embed("Whitelist vide", "Aucun utilisateur whitelisté."), ephemeral=True)
+
+        lines = []
+        for i, r in enumerate(rows[:20], 1):
+            expired = r["expires_at"] and r["expires_at"] < now_ts()
+            lines.append(f"`{i}.` <@{r['user_id']}> — {'❌' if expired else '✅'} — {r['script_access']}")
+
+        embed = discord.Embed(title=f"🔐 Whitelist OkveHUB ({len(rows)} membres)", description="\n".join(lines), color=COLOR_WL, timestamp=discord.utils.utcnow())
+        if len(rows) > 20: embed.set_footer(text=f"Affichage des 20 premiers sur {len(rows)}")
+        await interaction.response.send_message(embed=embed)
+
+    # ══════════ /wl-hwid ══════════
+    @app_commands.command(name="wl-hwid", description="🔑 Modifier le HWID d'un utilisateur")
+    @app_commands.describe(utilisateur="Utilisateur", hwid="Nouveau HWID")
+    async def wl_hwid(self, interaction: discord.Interaction, utilisateur: discord.Member, hwid: str = None):
+        if not await check_permission(interaction, "staff"): return
+
+        entry = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
+        if not entry:
+            return await interaction.response.send_message(embed=error_embed("Non whitelisté", f"**{utilisateur}** n'est pas dans la whitelist."), ephemeral=True)
+
+        await db_execute("UPDATE whitelist SET hwid=? WHERE user_id=?", (hwid, str(utilisateur.id)))
+        embed = success_embed("HWID Mis à jour", f"HWID de **{utilisateur}** {'modifié' if hwid else 'supprimé'}.\n**HWID:** `{hwid or 'Supprimé'}`")
+        await interaction.response.send_message(embed=embed)
+        await send_log(self.bot, "CHANNEL_LOGS_WHITELIST", embed)
+
+    # ══════════ /wl-stats ══════════
+    @app_commands.command(name="wl-stats", description="📊 Stats whitelist")
+    async def wl_stats(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, "staff"): return
+
+        rows = await db_fetchall("SELECT * FROM whitelist")
+        n = now_ts()
+        active = [r for r in rows if not r["expires_at"] or r["expires_at"] > n]
+        expired = [r for r in rows if r["expires_at"] and r["expires_at"] <= n]
+        permanent = [r for r in rows if not r["expires_at"]]
+
+        embed = discord.Embed(title="📊 Stats Whitelist OkveHUB", color=COLOR_WL, timestamp=discord.utils.utcnow())
+        embed.add_field(name="👥 Total", value=f"`{len(rows)}`", inline=True)
+        embed.add_field(name="✅ Actives", value=f"`{len(active)}`", inline=True)
+        embed.add_field(name="❌ Expirées", value=f"`{len(expired)}`", inline=True)
+        embed.add_field(name="♾️ Permanentes", value=f"`{len(permanent)}`", inline=True)
+        await interaction.response.send_message(embed=embed)
+
+    # ══════════ /bl-add ══════════
+    @app_commands.command(name="bl-add", description="🚫 Ajouter à la blacklist OkveHUB")
+    @app_commands.describe(utilisateur="Utilisateur", raison="Raison")
+    async def bl_add(self, interaction: discord.Interaction, utilisateur: discord.Member, raison: str):
+        if not await check_permission(interaction, "admin"): return
+
+        wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
+        if wl:
+            await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
+            role_id = os.getenv("ROLE_WHITELIST")
+            if role_id:
+                role = interaction.guild.get_role(int(role_id))
+                if role: await utilisateur.remove_roles(role)
+
+        await db_execute("INSERT INTO blacklist (user_id, username, reason, added_by) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason",
+            (str(utilisateur.id), str(utilisateur), raison, str(interaction.user.id)))
+
+        embed = discord.Embed(title="🚫 Blacklist Ajoutée", color=COLOR_ERROR, timestamp=discord.utils.utcnow())
+        embed.add_field(name="👤 Utilisateur", value=f"{utilisateur.mention}", inline=True)
+        embed.add_field(name="📝 Raison", value=raison, inline=False)
+        embed.add_field(name="🛡️ Par", value=interaction.user.mention, inline=True)
+        await interaction.response.send_message(embed=embed)
+        await send_log(self.bot, "CHANNEL_LOGS_WHITELIST", embed)
+
+    # ══════════ /bl-remove ══════════
+    @app_commands.command(name="bl-remove", description="✅ Retirer de la blacklist")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def bl_remove(self, interaction: discord.Interaction, utilisateur: discord.Member):
+        if not await check_permission(interaction, "admin"): return
+        bl = await db_fetchone("SELECT * FROM blacklist WHERE user_id=?", (str(utilisateur.id),))
+        if not bl:
+            return await interaction.response.send_message(embed=error_embed("Pas blacklisté", f"**{utilisateur}** n'est pas blacklisté."), ephemeral=True)
+        await db_execute("DELETE FROM blacklist WHERE user_id=?", (str(utilisateur.id),))
+        await interaction.response.send_message(embed=success_embed("Retiré de la blacklist", f"**{utilisateur}** n'est plus blacklisté."))
+
+    # ══════════ /bl-check ══════════
+    @app_commands.command(name="bl-check", description="🔍 Vérifier si quelqu'un est blacklisté")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def bl_check(self, interaction: discord.Interaction, utilisateur: discord.Member):
+        entry = await db_fetchone("SELECT * FROM blacklist WHERE user_id=?", (str(utilisateur.id),))
+        if not entry:
+            return await interaction.response.send_message(embed=success_embed("Non blacklisté", f"**{utilisateur}** n'est pas dans la blacklist."), ephemeral=True)
+        embed = discord.Embed(title="🚫 Utilisateur Blacklisté", color=COLOR_ERROR, timestamp=discord.utils.utcnow())
+        embed.add_field(name="👤 Utilisateur", value=utilisateur.mention, inline=True)
+        embed.add_field(name="📝 Raison", value=entry["reason"], inline=False)
+        embed.add_field(name="🛡️ Par", value=f"<@{entry['added_by']}>", inline=True)
+        embed.add_field(name="📅 Depuis", value=f"<t:{entry['created_at']}:F>", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Whitelist(bot))

@@ -1,230 +1,169 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import aiosqlite
-import time
 import os
-from utils.helpers import *
-from utils.logger import send_log
-from utils.database import DB_PATH
+from Database import db_execute, db_fetchone, db_fetchall
+from Helpers import *
 
-CATEGORIES = {
-    "support":  {"label": "🛠️ Support",     "desc": "Aide et support général"},
-    "achat":    {"label": "🛒 Achat",        "desc": "Questions sur les achats"},
-    "bug":      {"label": "🐛 Bug Report",   "desc": "Signaler un bug de script"},
-    "plainte":  {"label": "⚖️ Plainte",      "desc": "Signalement / plainte"},
-    "autre":    {"label": "📌 Autre",        "desc": "Autre demande"},
+TICKET_CATEGORIES = {
+    "support":      {"label": "Support",             "emoji": "🆘"},
+    "achat":        {"label": "Achat / Commande",    "emoji": "💳"},
+    "whitelist":    {"label": "Whitelist / HWID",    "emoji": "🔐"},
+    "bug":          {"label": "Bug Report",          "emoji": "🐛"},
+    "partenariat":  {"label": "Partenariat",         "emoji": "🤝"},
+    "litige":       {"label": "Litige / Remboursement","emoji": "⚖️"},
 }
 
-
-class TicketCategorySelect(discord.ui.Select):
+class TicketSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label=v["label"], value=k, description=v["desc"])
-            for k, v in CATEGORIES.items()
+            discord.SelectOption(label=v["label"], value=k, emoji=v["emoji"])
+            for k, v in TICKET_CATEGORIES.items()
         ]
-        super().__init__(placeholder="🎫 Choisir une catégorie...", options=options)
+        super().__init__(placeholder="📂 Choisir la catégorie...", options=options, custom_id="ticket_create")
 
     async def callback(self, interaction: discord.Interaction):
-        await create_ticket(interaction, self.values[0])
+        category = self.values[0]
+        cat_info = TICKET_CATEGORIES[category]
 
+        open_tickets = await db_fetchall("SELECT * FROM tickets WHERE user_id=? AND status='open'", (str(interaction.user.id),))
+        if len(open_tickets) >= 2:
+            return await interaction.response.send_message("❌ Tu as déjà 2 tickets ouverts. Ferme-en un avant d'en créer un nouveau.", ephemeral=True)
 
-class TicketPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(TicketCategorySelect())
+        ticket_id = generate_id("TKT")
+        guild = interaction.guild
+        category_id = os.getenv("CATEGORY_TICKETS")
 
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        }
+        staff_role_id = os.getenv("ROLE_STAFF")
+        if staff_role_id:
+            staff_role = guild.get_role(int(staff_role_id))
+            if staff_role:
+                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
-class CloseTicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🔒 Fermer le ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket")
-    async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM tickets WHERE channel_id=?", (str(interaction.channel.id),))
-            ticket = await cur.fetchone()
-
-        if not ticket:
-            return await interaction.response.send_message(embed=embed_error("Ce salon n'est pas un ticket."), ephemeral=True)
-
-        is_owner = str(interaction.user.id) == ticket["user_id"]
-        is_staff = interaction.user.guild_permissions.manage_channels
-
-        if not is_owner and not is_staff:
-            return await interaction.response.send_message(embed=embed_error("Tu ne peux pas fermer ce ticket."), ephemeral=True)
-
-        await interaction.response.send_message(embed=embed_warning(f"🔒 Ticket fermé par {interaction.user.mention}.\nSuppression dans 5 secondes..."))
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("UPDATE tickets SET status='closed', closed_at=?, closed_by=? WHERE channel_id=?",
-                             (int(time.time()), str(interaction.user.id), str(interaction.channel.id)))
-            await db.commit()
-
-        import asyncio
-        await asyncio.sleep(5)
-        await interaction.channel.delete(reason="Ticket fermé")
-        await send_log("TICKET_CLOSE", fields=[
-            {"name": "Ticket", "value": interaction.channel.name, "inline": True},
-            {"name": "Fermé par", "value": str(interaction.user), "inline": True},
-        ])
-
-
-async def create_ticket(interaction: discord.Interaction, category: str):
-    guild = interaction.guild
-    user = interaction.user
-    cat_info = CATEGORIES.get(category, CATEGORIES["support"])
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM tickets WHERE user_id=? AND guild_id=? AND status='open'",
-            (str(user.id), str(guild.id))
-        )
-        count = (await cur.fetchone())[0]
-
-    if count >= 2:
-        return await interaction.response.send_message(
-            embed=embed_error("Tu as déjà **2 tickets ouverts**. Ferme-en un d'abord."), ephemeral=True
+        parent = guild.get_channel(int(category_id)) if category_id else None
+        channel = await guild.create_text_channel(
+            name=f"{cat_info['emoji']}-{interaction.user.name}".lower().replace(" ", "-"),
+            overwrites=overwrites,
+            category=parent
         )
 
-    await interaction.response.defer(ephemeral=True)
+        await db_execute("INSERT INTO tickets (ticket_id, user_id, channel_id, category) VALUES (?,?,?,?)",
+            (ticket_id, str(interaction.user.id), str(channel.id), category))
 
-    # Trouver ou créer catégorie Discord
-    ticket_cat = discord.utils.get(guild.categories, name="🎫・Tickets")
-    if not ticket_cat:
-        ticket_cat = await guild.create_category("🎫・Tickets")
-
-    safe_name = user.name.lower().replace(" ", "-")[:20]
-    channel_name = f"{category}-{safe_name}"
-
-    # Permissions
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, read_message_history=True),
-    }
-    for role_env in ["ROLE_MODERATEUR", "ROLE_ADMIN", "ROLE_STAFF"]:
-        role_id = os.getenv(role_env)
-        if role_id:
-            role = guild.get_role(int(role_id))
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True, manage_channels=True)
-
-    channel = await guild.create_text_channel(channel_name, category=ticket_cat, overwrites=overwrites)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO tickets (channel_id,user_id,guild_id,category,created_at) VALUES (?,?,?,?,?)",
-            (str(channel.id), str(user.id), str(guild.id), category, int(time.time()))
-        )
-        await db.commit()
-
-    embed = discord.Embed(
-        title=f"{cat_info['label']} — Ticket ouvert",
-        description=f"Bienvenue {user.mention} !\n\nCatégorie : **{cat_info['label']}**\n\nNotre équipe va te répondre rapidement.\nDécris ton problème en détail avec des screenshots si nécessaire.",
-        color=Colors.MAIN
-    )
-    embed.set_footer(text="OkveHUB Support")
-    embed.timestamp = discord.utils.utcnow()
-
-    staff_ping = ""
-    for role_env in ["ROLE_STAFF", "ROLE_MODERATEUR"]:
-        role_id = os.getenv(role_env)
-        if role_id:
-            staff_ping = f"<@&{role_id}>"
-            break
-
-    await channel.send(content=f"{staff_ping} {user.mention}", embed=embed, view=CloseTicketView())
-    await interaction.followup.send(embed=embed_success(f"🎫 Ticket créé : {channel.mention}"), ephemeral=True)
-
-    await send_log("TICKET_OPEN", fields=[
-        {"name": "Utilisateur", "value": f"{user} ({user.id})", "inline": True},
-        {"name": "Catégorie", "value": cat_info["label"], "inline": True},
-        {"name": "Salon", "value": f"<#{channel.id}>", "inline": True},
-    ])
-
-
-class Tickets(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        bot.add_view(TicketPanelView())
-        bot.add_view(CloseTicketView())
-
-    ticket = app_commands.Group(name="ticket", description="Système de tickets")
-
-    @ticket.command(name="panel", description="Envoyer le panel de tickets")
-    @app_commands.default_permissions(administrator=True)
-    async def panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="🎫 Support OkveHUB",
-            description="\n".join([
-                "**Bienvenue dans le système de tickets OkveHUB !**",
-                "",
-                "Clique sur le menu ci-dessous pour ouvrir un ticket.",
-                "Notre équipe te répondra dans les meilleurs délais.",
-                "",
-                "**Catégories :**",
-                *[f"{v['label']} — {v['desc']}" for v in CATEGORIES.values()],
-            ]),
-            color=Colors.MAIN
+            title=f"{cat_info['emoji']} Ticket — {cat_info['label']}",
+            description=f"Bienvenue **{interaction.user.name}** !\n\nTon ticket `{ticket_id}` a été créé.\nUn staff va te répondre sous peu.\n\n**Décris ton problème en détail.**",
+            color=COLOR_TICKET, timestamp=discord.utils.utcnow()
         )
-        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
-        embed.set_footer(text="OkveHUB Support • Un ticket par problème SVP")
-        embed.timestamp = discord.utils.utcnow()
-        await interaction.response.send_message(embed=embed, view=TicketPanelView())
+        embed.add_field(name="📂 Catégorie", value=cat_info["label"], inline=True)
+        embed.set_footer(text=f"OkveHUB Support • {ticket_id}")
 
-    @ticket.command(name="open", description="Ouvrir un ticket")
-    @app_commands.describe(categorie="Catégorie du ticket")
-    @app_commands.choices(categorie=[app_commands.Choice(name=v["label"], value=k) for k, v in CATEGORIES.items()])
-    async def open_ticket(self, interaction: discord.Interaction, categorie: str = "support"):
-        await create_ticket(interaction, categorie)
+        view = TicketControls()
+        staff_mention = f"<@&{staff_role_id}>" if staff_role_id else ""
+        await channel.send(content=f"{interaction.user.mention} {staff_mention}", embed=embed, view=view)
+        await interaction.response.send_message(f"✅ Ton ticket a été créé : {channel.mention}", ephemeral=True)
 
-    @ticket.command(name="close", description="Fermer le ticket actuel")
-    async def close_ticket(self, interaction: discord.Interaction, raison: str = "Résolu"):
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT * FROM tickets WHERE channel_id=?", (str(interaction.channel.id),))
-            ticket = await cur.fetchone()
-        if not ticket:
-            return await interaction.response.send_message(embed=embed_error("Ce salon n'est pas un ticket."), ephemeral=True)
-        is_owner = str(interaction.user.id) == ticket[2]
-        is_staff = interaction.user.guild_permissions.manage_channels
-        if not is_owner and not is_staff:
-            return await interaction.response.send_message(embed=embed_error("Tu ne peux pas fermer ce ticket."), ephemeral=True)
-        await interaction.response.send_message(embed=embed_warning(f"🔒 Fermé par {interaction.user.mention}.\n**Raison :** {raison}\nSuppression dans 5s..."))
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("UPDATE tickets SET status='closed', closed_at=?, closed_by=? WHERE channel_id=?",
-                             (int(time.time()), str(interaction.user.id), str(interaction.channel.id)))
-            await db.commit()
+class TicketSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketSelect())
+
+class TicketControls(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 Fermer", style=discord.ButtonStyle.danger, custom_id="ticket_close_btn")
+    async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket = await db_fetchone("SELECT * FROM tickets WHERE channel_id=?", (str(interaction.channel_id),))
+        if not ticket: return
+        if str(interaction.user.id) != ticket["user_id"] and not is_staff(interaction.user):
+            return await interaction.response.send_message("❌ Seul le créateur ou un staff peut fermer ce ticket.", ephemeral=True)
+        await db_execute("UPDATE tickets SET status='closed', closed_at=strftime('%s','now') WHERE ticket_id=?", (ticket["ticket_id"],))
+        await interaction.response.send_message(embed=success_embed("Ticket Fermé", f"Ticket `{ticket['ticket_id']}` fermé par {interaction.user.mention}.\n*Ce salon sera supprimé dans 5 secondes.*"))
         import asyncio
         await asyncio.sleep(5)
         await interaction.channel.delete()
 
-    @ticket.command(name="add", description="Ajouter un membre au ticket")
-    async def add_member(self, interaction: discord.Interaction, membre: discord.Member):
+    @discord.ui.button(label="✋ Prendre en charge", style=discord.ButtonStyle.primary, custom_id="ticket_claim_btn")
+    async def claim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_staff(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        await interaction.channel.set_permissions(membre, view_channel=True, send_messages=True)
-        await interaction.response.send_message(embed=embed_success(f"{membre.mention} ajouté au ticket."))
+            return await interaction.response.send_message("❌ Réservé au staff.", ephemeral=True)
+        ticket = await db_fetchone("SELECT * FROM tickets WHERE channel_id=?", (str(interaction.channel_id),))
+        if not ticket: return
+        if ticket["claimed_by"]:
+            return await interaction.response.send_message(f"⚠️ Déjà pris par <@{ticket['claimed_by']}>.", ephemeral=True)
+        await db_execute("UPDATE tickets SET claimed_by=? WHERE ticket_id=?", (str(interaction.user.id), ticket["ticket_id"]))
+        await interaction.response.send_message(embed=success_embed("Ticket Pris", f"{interaction.user.mention} prend en charge ce ticket."))
 
-    @ticket.command(name="remove", description="Retirer un membre du ticket")
-    async def remove_member(self, interaction: discord.Interaction, membre: discord.Member):
-        if not is_staff(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        await interaction.channel.set_permissions(membre, view_channel=False)
-        await interaction.response.send_message(embed=embed_success(f"{membre.mention} retiré du ticket."))
+class Tickets(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
 
-    @ticket.command(name="list", description="Voir les tickets ouverts")
-    @app_commands.default_permissions(moderate_members=True)
-    async def list_tickets(self, interaction: discord.Interaction):
-        if not is_staff(interaction.user):
-            return await interaction.response.send_message(embed=embed_error("Permission refusée."), ephemeral=True)
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM tickets WHERE guild_id=? AND status='open'", (str(interaction.guild.id),))
-            rows = await cur.fetchall()
-        desc = "\n".join(f"<#{r['channel_id']}> — <@{r['user_id']}> — `{r['category']}`" for r in rows) or "*Aucun ticket ouvert.*"
-        embed = discord.Embed(title=f"🎫 Tickets ouverts ({len(rows)})", description=desc, color=Colors.MAIN)
+    @app_commands.command(name="ticket-setup", description="🎫 Créer le panel de tickets")
+    async def ticket_setup(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, "admin"): return
+        embed = discord.Embed(
+            title="🎫 Support OkveHUB",
+            description="**Bienvenue sur le support OkveHUB !**\n\nNotre équipe est là pour t'aider avec :\n> 🆘 Support technique\n> 💳 Achats & Commandes\n> 🔐 Whitelist / HWID\n> 🐛 Bug Reports\n> 🤝 Partenariats\n> ⚖️ Litiges\n\n**Clique sur le menu pour ouvrir un ticket.**",
+            color=COLOR_TICKET, timestamp=discord.utils.utcnow()
+        )
+        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+        embed.set_footer(text="OkveHUB — Support 24/7")
+        await interaction.channel.send(embed=embed, view=TicketSelectView())
+        await interaction.response.send_message("✅ Panel de tickets créé !", ephemeral=True)
+
+    @app_commands.command(name="ticket-close", description="🔒 Fermer le ticket actuel")
+    @app_commands.describe(raison="Raison de fermeture")
+    async def ticket_close(self, interaction: discord.Interaction, raison: str = "Fermé par l'utilisateur"):
+        ticket = await db_fetchone("SELECT * FROM tickets WHERE channel_id=?", (str(interaction.channel_id),))
+        if not ticket:
+            return await interaction.response.send_message(embed=error_embed("Pas un ticket", "Commande à utiliser dans un ticket."), ephemeral=True)
+        if str(interaction.user.id) != ticket["user_id"] and not is_staff(interaction.user):
+            return await interaction.response.send_message(embed=error_embed("Permissions", "Seul le créateur ou un staff peut fermer ce ticket."), ephemeral=True)
+        await db_execute("UPDATE tickets SET status='closed', closed_at=strftime('%s','now') WHERE ticket_id=?", (ticket["ticket_id"],))
+        await interaction.response.send_message(embed=success_embed("Ticket Fermé", f"Fermé par {interaction.user.mention}\n**Raison:** {raison}\n*Suppression dans 5s...*"))
+        import asyncio
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+
+    @app_commands.command(name="ticket-add", description="➕ Ajouter un utilisateur au ticket")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def ticket_add(self, interaction: discord.Interaction, utilisateur: discord.Member):
+        if not await check_permission(interaction, "staff"): return
+        await interaction.channel.set_permissions(utilisateur, view_channel=True, send_messages=True)
+        await interaction.response.send_message(embed=success_embed("Ajouté", f"{utilisateur.mention} a été ajouté au ticket."))
+
+    @app_commands.command(name="ticket-remove", description="➖ Retirer un utilisateur du ticket")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def ticket_remove(self, interaction: discord.Interaction, utilisateur: discord.Member):
+        if not await check_permission(interaction, "staff"): return
+        await interaction.channel.set_permissions(utilisateur, view_channel=False)
+        await interaction.response.send_message(embed=success_embed("Retiré", f"{utilisateur.mention} a été retiré du ticket."))
+
+    @app_commands.command(name="ticket-claim", description="✋ Prendre en charge ce ticket")
+    async def ticket_claim(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, "staff"): return
+        ticket = await db_fetchone("SELECT * FROM tickets WHERE channel_id=?", (str(interaction.channel_id),))
+        if not ticket:
+            return await interaction.response.send_message(embed=error_embed("Pas un ticket", "Commande à utiliser dans un ticket."), ephemeral=True)
+        if ticket["claimed_by"]:
+            return await interaction.response.send_message(embed=warn_embed("Déjà pris", f"Ticket pris par <@{ticket['claimed_by']}>."), ephemeral=True)
+        await db_execute("UPDATE tickets SET claimed_by=? WHERE ticket_id=?", (str(interaction.user.id), ticket["ticket_id"]))
+        await interaction.response.send_message(embed=success_embed("Pris en charge", f"{interaction.user.mention} prend ce ticket."))
+
+    @app_commands.command(name="ticket-list", description="📋 Voir tous les tickets ouverts")
+    async def ticket_list(self, interaction: discord.Interaction):
+        if not await check_permission(interaction, "staff"): return
+        rows = await db_fetchall("SELECT * FROM tickets WHERE status='open' ORDER BY created_at DESC")
+        if not rows:
+            return await interaction.response.send_message(embed=info_embed("Aucun ticket", "Aucun ticket ouvert."), ephemeral=True)
+        lines = [f"`{r['ticket_id']}` — <@{r['user_id']}> — `{r['category']}` — {'<@' + r['claimed_by'] + '>' if r['claimed_by'] else '⚠️ Non pris'}" for r in rows]
+        embed = discord.Embed(title=f"🎫 Tickets Ouverts ({len(rows)})", description="\n".join(lines), color=COLOR_TICKET, timestamp=discord.utils.utcnow())
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 async def setup(bot):
     await bot.add_cog(Tickets(bot))
