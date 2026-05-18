@@ -3,7 +3,6 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import secrets
-import time
 import aiohttp
 
 from Database import db_execute, db_fetchone, db_fetchall
@@ -57,7 +56,7 @@ async def send_purchase_log(guild, embed):
             pass
 
 
-async def whitelist_after_payment(interaction: discord.Interaction, purchase_id: str, script_name: str, tx_hash: str = None):
+async def whitelist_after_payment(interaction, purchase_id, script_name, tx_hash=None):
     key_code = "OKV-" + secrets.token_hex(8).upper()
 
     await db_execute(
@@ -90,20 +89,23 @@ async def whitelist_after_payment(interaction: discord.Interaction, purchase_id:
     loader = make_loader(key_code)
 
     embed = discord.Embed(
-        title="✅ Purchase Completed",
+        title="✅ Payment Confirmed",
         description=(
-            f"Merci pour ton achat !\n\n"
+            "Your purchase has been successfully completed.\n\n"
             f"**Script:** `{script_name}`\n"
             f"**Key:** `{key_code}`\n\n"
-            f"```lua\n{loader}\n```"
+            "```lua\n"
+            f"{loader}\n"
+            "```"
         ),
-        color=COLOR_SUCCESS
+        color=0x2ECC71
     )
 
+    embed.set_footer(text="OkveHUB Secure Delivery")
     return embed
 
 
-async def check_ltc_payment(address: str, required_amount: float, created_at: int):
+async def check_ltc_payment(address: str, required_amount: float):
     url = f"https://api.blockcypher.com/v1/ltc/main/addrs/{address}/full?limit=50"
 
     async with aiohttp.ClientSession() as session:
@@ -116,16 +118,10 @@ async def check_ltc_payment(address: str, required_amount: float, created_at: in
     required_satoshis = int(required_amount * 100_000_000)
 
     for tx in data.get("txs", []):
-        confirmed = tx.get("confirmed")
-        received = tx.get("received")
-        tx_time = confirmed or received
-
         tx_hash = tx.get("hash")
-        outputs = tx.get("outputs", [])
-
         total_received = 0
 
-        for out in outputs:
+        for out in tx.get("outputs", []):
             if address in out.get("addresses", []):
                 total_received += int(out.get("value", 0))
 
@@ -140,7 +136,7 @@ class PurchaseCheckView(discord.ui.View):
         super().__init__(timeout=900)
         self.purchase_id = purchase_id
 
-    @discord.ui.button(label="✅ I Paid", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ I Paid", style=discord.ButtonStyle.success, custom_id="purchase_check_payment")
     async def check_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
         purchase = await db_fetchone(
             "SELECT * FROM purchases WHERE purchase_id=?",
@@ -148,25 +144,54 @@ class PurchaseCheckView(discord.ui.View):
         )
 
         if not purchase:
-            return await interaction.response.send_message("❌ Achat introuvable.", ephemeral=True)
+            return await interaction.response.send_message("❌ Purchase not found.", ephemeral=True)
 
         if purchase["status"] == "completed":
-            return await interaction.response.send_message("✅ Cet achat est déjà validé.", ephemeral=True)
+            return await interaction.response.send_message("✅ This purchase is already completed.", ephemeral=True)
 
         if str(interaction.user.id) != purchase["user_id"]:
-            return await interaction.response.send_message("❌ Ce paiement ne t'appartient pas.", ephemeral=True)
+            return await interaction.response.send_message("❌ This purchase is not yours.", ephemeral=True)
 
-        address = os.getenv("LTC_ADDRESS")
-        amount = float(purchase["amount_ltc"])
-        created_at = int(purchase["created_at"])
+        pending_embed = discord.Embed(
+            title="⏳ Checking Payment",
+            description=(
+                "Please wait while OkveHUB verifies your Litecoin payment.\n\n"
+                "```ansi\n"
+                "Status  : Pending\n"
+                "Network : Litecoin\n"
+                "Check   : In progress...\n"
+                "```"
+            ),
+            color=0xF1C40F
+        )
+        pending_embed.set_footer(text="OkveHUB Payment Gateway")
 
-        tx_hash = await check_ltc_payment(address, amount, created_at)
+        await interaction.response.send_message(embed=pending_embed, ephemeral=True)
+
+        test_mode = os.getenv("PURCHASE_TEST_MODE", "false").lower() == "true"
+
+        if test_mode:
+            tx_hash = "TEST-LTC-" + secrets.token_hex(6).upper()
+        else:
+            address = os.getenv("LTC_ADDRESS")
+            amount = float(purchase["amount_ltc"])
+            tx_hash = await check_ltc_payment(address, amount)
 
         if not tx_hash:
-            return await interaction.response.send_message(
-                "⏳ Paiement pas encore détecté. Attends quelques minutes puis reclique.",
-                ephemeral=True
+            fail_embed = discord.Embed(
+                title="⌛ Payment Still Pending",
+                description=(
+                    "We could not detect your payment yet.\n\n"
+                    "**What to do:**\n"
+                    "• Wait a few minutes\n"
+                    "• Make sure the amount is correct\n"
+                    "• Click **I Paid** again\n\n"
+                    "If the issue continues, open a ticket."
+                ),
+                color=0xE67E22
             )
+            fail_embed.set_footer(text="OkveHUB Payment Gateway")
+            return await interaction.followup.send(embed=fail_embed, ephemeral=True)
 
         embed = await whitelist_after_payment(
             interaction,
@@ -175,31 +200,30 @@ class PurchaseCheckView(discord.ui.View):
             tx_hash
         )
 
-        log = discord.Embed(title="💰 Purchase Completed", color=COLOR_SUCCESS)
+        log = discord.Embed(title="💰 Purchase Completed", color=0x2ECC71)
         log.add_field(name="User", value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=False)
-        log.add_field(name="Method", value="LTC", inline=True)
-        log.add_field(name="Amount", value=str(amount), inline=True)
-        log.add_field(name="TX", value=f"`{tx_hash}`", inline=False)
+        log.add_field(name="Method", value="LTC TEST" if test_mode else "LTC", inline=True)
+        log.add_field(name="Amount", value=str(purchase["amount_ltc"]), inline=True)
+        log.add_field(name="TX Hash", value=f"`{tx_hash}`", inline=False)
+        log.set_footer(text="OkveHUB Purchase Logs")
+
         await send_purchase_log(interaction.guild, log)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 class PurchasePanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="💰 Buy with LTC", style=discord.ButtonStyle.success, custom_id="okvehub_buy_ltc")
+    @discord.ui.button(label="💰 Buy with LTC", style=discord.ButtonStyle.success, custom_id="okvehub_purchase_ltc")
     async def buy_ltc(self, interaction: discord.Interaction, button: discord.ui.Button):
         address = os.getenv("LTC_ADDRESS")
         amount = float(os.getenv("LTC_AMOUNT", "0.01"))
         script_name = os.getenv("PURCHASE_SCRIPT", "main")
 
         if not address:
-            return await interaction.response.send_message(
-                "❌ LTC_ADDRESS manquant dans Railway.",
-                ephemeral=True
-            )
+            return await interaction.response.send_message("❌ LTC_ADDRESS missing in Railway.", ephemeral=True)
 
         purchase_id = "PUR-" + secrets.token_hex(4).upper()
 
@@ -216,15 +240,32 @@ class PurchasePanel(discord.ui.View):
         ))
 
         embed = discord.Embed(
-            title="💰 Litecoin Payment",
+            title="💰 Litecoin Checkout",
             description=(
+                "Your secure payment session has been created.\n\n"
                 f"**Purchase ID:** `{purchase_id}`\n"
-                f"**Amount:** `{amount} LTC`\n"
-                f"**Address:**\n`{address}`\n\n"
-                f"Après paiement, clique sur **I Paid**."
+                f"**Product:** `{script_name}`\n"
+                f"**Amount:** `{amount} LTC`\n\n"
+                "**Send payment to:**\n"
+                f"`{address}`\n\n"
+                "After sending the payment, click **I Paid** below."
             ),
             color=0xF1C40F
         )
+
+        embed.add_field(
+            name="Status",
+            value="🟡 Pending payment",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Delivery",
+            value="Automatic after confirmation",
+            inline=True
+        )
+
+        embed.set_footer(text="OkveHUB Secure Checkout")
 
         await interaction.response.send_message(
             embed=embed,
@@ -232,25 +273,24 @@ class PurchasePanel(discord.ui.View):
             ephemeral=True
         )
 
-    @discord.ui.button(label="🧠 Buy with BrainDrop", style=discord.ButtonStyle.primary, custom_id="okvehub_buy_braindrop")
+    @discord.ui.button(label="🧠 Buy with BrainDrop", style=discord.ButtonStyle.primary, custom_id="okvehub_purchase_braindrop")
     async def buy_braindrop(self, interaction: discord.Interaction, button: discord.ui.Button):
         username = os.getenv("BRAINDROP_USERNAME")
 
         if not username:
-            return await interaction.response.send_message(
-                "❌ BRAINDROP_USERNAME manquant dans Railway.",
-                ephemeral=True
-            )
+            return await interaction.response.send_message("❌ BRAINDROP_USERNAME missing in Railway.", ephemeral=True)
 
         embed = discord.Embed(
             title="🧠 BrainDrop Payment",
             description=(
-                f"Envoie le paiement à ce pseudo :\n"
+                "Please send the payment to the username below:\n\n"
                 f"`{username}`\n\n"
-                f"Si ça ne marche pas, ouvre un ticket ou contacte le staff."
+                "If the payment does not work, open a ticket or contact staff."
             ),
             color=0x5865F2
         )
+
+        embed.set_footer(text="OkveHUB BrainDrop Checkout")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -265,18 +305,24 @@ class Purchase(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🛒 OkveHUB Purchase",
+            title="🛒 OkveHUB Store",
             description=(
-                "Acheter un accès au script OkveHUB.\n\n"
-                "Choisis ton moyen de paiement :\n"
-                "💰 **LTC** — paiement automatique\n"
-                "🧠 **BrainDrop** — paiement via pseudo"
+                "**Purchase your OkveHUB access securely.**\n\n"
+                "Choose your payment method below.\n\n"
+                "💰 **Litecoin** — automatic verification\n"
+                "🧠 **BrainDrop** — manual payment username\n\n"
+                "Once your payment is confirmed, the system will automatically deliver:\n"
+                "• Your whitelist access\n"
+                "• Your buyer role\n"
+                "• Your private loader key"
             ),
             color=0x000000
         )
 
+        embed.set_footer(text="OkveHUB Purchase System")
+
         await interaction.channel.send(embed=embed, view=PurchasePanel())
-        await interaction.response.send_message("✅ Panel d'achat envoyé.", ephemeral=True)
+        await interaction.response.send_message("✅ Purchase panel sent.", ephemeral=True)
 
     @app_commands.command(name="purchase-list", description="Voir les achats")
     async def purchase_list(self, interaction: discord.Interaction):
@@ -286,46 +332,19 @@ class Purchase(commands.Cog):
         rows = await db_fetchall("SELECT * FROM purchases ORDER BY created_at DESC LIMIT 15")
 
         if not rows:
-            return await interaction.response.send_message("Aucun achat.", ephemeral=True)
+            return await interaction.response.send_message("No purchases found.", ephemeral=True)
 
         lines = []
         for r in rows:
+            status = "✅ completed" if r["status"] == "completed" else "🟡 pending"
             lines.append(
-                f"`{r['purchase_id']}` — <@{r['user_id']}> — **{r['method']}** — `{r['status']}`"
+                f"`{r['purchase_id']}` — <@{r['user_id']}> — **{r['method']}** — {status}"
             )
 
         embed = discord.Embed(
-            title="🛒 Purchases",
+            title="🛒 Purchase History",
             description="\n".join(lines),
             color=0x3498DB
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="purchase-complete", description="Valider manuellement un achat")
-    async def purchase_complete(self, interaction: discord.Interaction, purchase_id: str):
-        if not await check_permission(interaction, "staff"):
-            return
-
-        purchase = await db_fetchone(
-            "SELECT * FROM purchases WHERE purchase_id=?",
-            (purchase_id,)
-        )
-
-        if not purchase:
-            return await interaction.response.send_message("❌ Achat introuvable.", ephemeral=True)
-
-        member = interaction.guild.get_member(int(purchase["user_id"]))
-        if not member:
-            return await interaction.response.send_message("❌ Membre introuvable.", ephemeral=True)
-
-        interaction.user = member
-
-        embed = await whitelist_after_payment(
-            interaction,
-            purchase["purchase_id"],
-            purchase["script_name"],
-            "manual"
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
