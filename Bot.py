@@ -39,6 +39,7 @@ class OkveHUBBot(commands.Bot):
             "Utility",
             "Reglement",
             "Roles",
+            "Site",
         ]
 
         for cog in cogs:
