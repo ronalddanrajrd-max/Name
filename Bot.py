@@ -24,12 +24,10 @@ class OkveHUBBot(commands.Bot):
         self.start_time = time.time()
 
     async def setup_hook(self):
-        # Base de données
         Logger.info("Initialisation de la base de données...")
         await init_db()
         Logger.success("Base de données prête !")
 
-        # Cogs à charger
         cogs = [
             "Events",
             "Whitelist",
@@ -43,6 +41,7 @@ class OkveHUBBot(commands.Bot):
             "Reglement",
             "Roles",
             "Site",
+            "Purchase",
         ]
 
         for cog in cogs:
@@ -52,7 +51,7 @@ class OkveHUBBot(commands.Bot):
             except Exception as e:
                 Logger.error(f"Erreur chargement {cog}: {e}")
 
-        # Recharger les panels persistants après redémarrage Railway
+        # Recharger les panels persistants
         try:
             from Tickets import TicketSelectView, TicketControls
             self.add_view(TicketSelectView())
@@ -75,7 +74,13 @@ class OkveHUBBot(commands.Bot):
         except Exception as e:
             Logger.error(f"Erreur panel Roles: {e}")
 
-        # Synchronisation des commandes slash
+        try:
+            from Purchase import PurchasePanel
+            self.add_view(PurchasePanel())
+            Logger.success("Panel Purchase rechargé")
+        except Exception as e:
+            Logger.error(f"Erreur panel Purchase: {e}")
+
         guild_id = os.getenv("GUILD_ID")
 
         try:
