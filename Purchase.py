@@ -9,6 +9,9 @@ from Database import db_execute, db_fetchone, db_fetchall
 from Helpers import *
 
 
+PRICE_DISPLAY = "5$ LTC"
+
+
 def make_loader(key_code: str):
     base_url = os.getenv("BASE_URL", "https://name-production-e582.up.railway.app").rstrip("/")
     return f'''script_key="{key_code}";
@@ -94,9 +97,7 @@ async def whitelist_after_payment(interaction, purchase_id, script_name, tx_hash
             "Your purchase has been successfully completed.\n\n"
             f"**Script:** `{script_name}`\n"
             f"**Key:** `{key_code}`\n\n"
-            "```lua\n"
-            f"{loader}\n"
-            "```"
+            f"```lua\n{loader}\n```"
         ),
         color=0x2ECC71
     )
@@ -136,7 +137,11 @@ class PurchaseCheckView(discord.ui.View):
         super().__init__(timeout=900)
         self.purchase_id = purchase_id
 
-    @discord.ui.button(label="✅ I Paid", style=discord.ButtonStyle.success, custom_id="purchase_check_payment")
+    @discord.ui.button(
+        label="✅ I Paid",
+        style=discord.ButtonStyle.success,
+        custom_id="okvehub_purchase_check_v2"
+    )
     async def check_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
         purchase = await db_fetchone(
             "SELECT * FROM purchases WHERE purchase_id=?",
@@ -144,22 +149,31 @@ class PurchaseCheckView(discord.ui.View):
         )
 
         if not purchase:
-            return await interaction.response.send_message("❌ Purchase not found.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ Purchase not found.",
+                ephemeral=True
+            )
 
         if purchase["status"] == "completed":
-            return await interaction.response.send_message("✅ This purchase is already completed.", ephemeral=True)
+            return await interaction.response.send_message(
+                "✅ This purchase is already completed.",
+                ephemeral=True
+            )
 
         if str(interaction.user.id) != purchase["user_id"]:
-            return await interaction.response.send_message("❌ This purchase is not yours.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ This purchase is not yours.",
+                ephemeral=True
+            )
 
         pending_embed = discord.Embed(
             title="⏳ Checking Payment",
             description=(
-                "Please wait while OkveHUB verifies your Litecoin payment.\n\n"
-                "```ansi\n"
+                "OkveHUB is verifying your Litecoin payment.\n\n"
+                "```txt\n"
                 "Status  : Pending\n"
                 "Network : Litecoin\n"
-                "Check   : In progress...\n"
+                "Gateway : OkveHUB Secure Checkout\n"
                 "```"
             ),
             color=0xF1C40F
@@ -181,16 +195,14 @@ class PurchaseCheckView(discord.ui.View):
             fail_embed = discord.Embed(
                 title="⌛ Payment Still Pending",
                 description=(
-                    "We could not detect your payment yet.\n\n"
-                    "**What to do:**\n"
-                    "• Wait a few minutes\n"
-                    "• Make sure the amount is correct\n"
-                    "• Click **I Paid** again\n\n"
+                    "Payment was not detected yet.\n\n"
+                    "Please wait a few minutes, then click **I Paid** again.\n"
                     "If the issue continues, open a ticket."
                 ),
                 color=0xE67E22
             )
             fail_embed.set_footer(text="OkveHUB Payment Gateway")
+
             return await interaction.followup.send(embed=fail_embed, ephemeral=True)
 
         embed = await whitelist_after_payment(
@@ -200,11 +212,35 @@ class PurchaseCheckView(discord.ui.View):
             tx_hash
         )
 
-        log = discord.Embed(title="💰 Purchase Completed", color=0x2ECC71)
-        log.add_field(name="User", value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=False)
-        log.add_field(name="Method", value="LTC TEST" if test_mode else "LTC", inline=True)
-        log.add_field(name="Amount", value=str(purchase["amount_ltc"]), inline=True)
-        log.add_field(name="TX Hash", value=f"`{tx_hash}`", inline=False)
+        log = discord.Embed(
+            title="💰 Purchase Completed",
+            color=0x2ECC71
+        )
+        log.add_field(
+            name="User",
+            value=f"{interaction.user.mention}\n`{interaction.user.id}`",
+            inline=False
+        )
+        log.add_field(
+            name="Method",
+            value="LTC TEST" if test_mode else "LTC",
+            inline=True
+        )
+        log.add_field(
+            name="Price",
+            value=PRICE_DISPLAY,
+            inline=True
+        )
+        log.add_field(
+            name="Required LTC Amount",
+            value=str(purchase["amount_ltc"]),
+            inline=True
+        )
+        log.add_field(
+            name="TX Hash",
+            value=f"`{tx_hash}`",
+            inline=False
+        )
         log.set_footer(text="OkveHUB Purchase Logs")
 
         await send_purchase_log(interaction.guild, log)
@@ -216,14 +252,21 @@ class PurchasePanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="💰 Buy with LTC", style=discord.ButtonStyle.success, custom_id="okvehub_purchase_ltc")
+    @discord.ui.button(
+        label="💰 Buy with LTC",
+        style=discord.ButtonStyle.success,
+        custom_id="okvehub_purchase_ltc_v2"
+    )
     async def buy_ltc(self, interaction: discord.Interaction, button: discord.ui.Button):
         address = os.getenv("LTC_ADDRESS")
         amount = float(os.getenv("LTC_AMOUNT", "0.01"))
         script_name = os.getenv("PURCHASE_SCRIPT", "main")
 
         if not address:
-            return await interaction.response.send_message("❌ LTC_ADDRESS missing in Railway.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ LTC_ADDRESS missing in Railway.",
+                ephemeral=True
+            )
 
         purchase_id = "PUR-" + secrets.token_hex(4).upper()
 
@@ -245,7 +288,7 @@ class PurchasePanel(discord.ui.View):
                 "Your secure payment session has been created.\n\n"
                 f"**Purchase ID:** `{purchase_id}`\n"
                 f"**Product:** `{script_name}`\n"
-                f"**Amount:** `{amount} LTC`\n\n"
+                f"**Price:** `{PRICE_DISPLAY}`\n\n"
                 "**Send payment to:**\n"
                 f"`{address}`\n\n"
                 "After sending the payment, click **I Paid** below."
@@ -273,12 +316,19 @@ class PurchasePanel(discord.ui.View):
             ephemeral=True
         )
 
-    @discord.ui.button(label="🧠 Buy with BrainDrop", style=discord.ButtonStyle.primary, custom_id="okvehub_purchase_braindrop")
+    @discord.ui.button(
+        label="🧠 Buy with BrainDrop",
+        style=discord.ButtonStyle.primary,
+        custom_id="okvehub_purchase_braindrop_v2"
+    )
     async def buy_braindrop(self, interaction: discord.Interaction, button: discord.ui.Button):
         username = os.getenv("BRAINDROP_USERNAME")
 
         if not username:
-            return await interaction.response.send_message("❌ BRAINDROP_USERNAME missing in Railway.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ BRAINDROP_USERNAME missing in Railway.",
+                ephemeral=True
+            )
 
         embed = discord.Embed(
             title="🧠 BrainDrop Payment",
@@ -290,6 +340,12 @@ class PurchasePanel(discord.ui.View):
             color=0x5865F2
         )
 
+        embed.add_field(
+            name="Price",
+            value=PRICE_DISPLAY,
+            inline=True
+        )
+
         embed.set_footer(text="OkveHUB BrainDrop Checkout")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -299,7 +355,10 @@ class Purchase(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="purchase-panel", description="Créer le panel d'achat OkveHUB")
+    @app_commands.command(
+        name="purchase-panel",
+        description="Créer le panel d'achat OkveHUB"
+    )
     async def purchase_panel(self, interaction: discord.Interaction):
         if not await check_permission(interaction, "admin"):
             return
@@ -308,6 +367,7 @@ class Purchase(commands.Cog):
             title="🛒 OkveHUB Store",
             description=(
                 "**Purchase your OkveHUB access securely.**\n\n"
+                f"**Price:** `{PRICE_DISPLAY}`\n\n"
                 "Choose your payment method below.\n\n"
                 "💰 **Litecoin** — automatic verification\n"
                 "🧠 **BrainDrop** — manual payment username\n\n"
@@ -322,19 +382,32 @@ class Purchase(commands.Cog):
         embed.set_footer(text="OkveHUB Purchase System")
 
         await interaction.channel.send(embed=embed, view=PurchasePanel())
-        await interaction.response.send_message("✅ Purchase panel sent.", ephemeral=True)
 
-    @app_commands.command(name="purchase-list", description="Voir les achats")
+        await interaction.response.send_message(
+            "✅ Purchase panel sent.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="purchase-list",
+        description="Voir les achats"
+    )
     async def purchase_list(self, interaction: discord.Interaction):
         if not await check_permission(interaction, "staff"):
             return
 
-        rows = await db_fetchall("SELECT * FROM purchases ORDER BY created_at DESC LIMIT 15")
+        rows = await db_fetchall(
+            "SELECT * FROM purchases ORDER BY created_at DESC LIMIT 15"
+        )
 
         if not rows:
-            return await interaction.response.send_message("No purchases found.", ephemeral=True)
+            return await interaction.response.send_message(
+                "No purchases found.",
+                ephemeral=True
+            )
 
         lines = []
+
         for r in rows:
             status = "✅ completed" if r["status"] == "completed" else "🟡 pending"
             lines.append(
