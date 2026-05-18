@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+import os
 
 
 class Site(commands.Cog):
@@ -15,6 +16,20 @@ class Site(commands.Cog):
         self,
         interaction: discord.Interaction
     ):
+        owner_id = os.getenv("OWNER_ID")
+
+        if not owner_id:
+            return await interaction.response.send_message(
+                "❌ OWNER_ID manquant dans Railway.",
+                ephemeral=True
+            )
+
+        if str(interaction.user.id) != owner_id:
+            return await interaction.response.send_message(
+                "❌ Seul le owner peut utiliser cette commande.",
+                ephemeral=True
+            )
+
         embed = discord.Embed(
             title="🌐・OkveHUB Site",
             description=(
