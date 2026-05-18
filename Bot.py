@@ -39,17 +39,19 @@ class OkveHUBBot(commands.Bot):
 
         # Charger tous les cogs
         cogs = [
-            "Events",
-            "Whitelist",
-            "Moderation",
-            "Tickets",
-            "Admin",
-            "Announcements",
-            "Giveaway",
-            "Levels",
-            "Utility",
-            "Reglement",
-        ]
+    "Events",
+    "Whitelist",
+    "Moderation",
+    "Tickets",
+    "Admin",
+    "Announcements",
+    "Giveaway",
+    "Levels",
+    "Utility",
+    "Reglement",
+    "ReactionRole",
+]
+
 
         for cog in cogs:
             try:
