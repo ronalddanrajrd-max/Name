@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from dotenv import load_dotenv
+
 from Database import init_db
 import Logger
 
@@ -23,10 +24,12 @@ class OkveHUBBot(commands.Bot):
         self.start_time = time.time()
 
     async def setup_hook(self):
+        # Base de données
         Logger.info("Initialisation de la base de données...")
         await init_db()
         Logger.success("Base de données prête !")
 
+        # Cogs à charger
         cogs = [
             "Events",
             "Whitelist",
@@ -49,6 +52,30 @@ class OkveHUBBot(commands.Bot):
             except Exception as e:
                 Logger.error(f"Erreur chargement {cog}: {e}")
 
+        # Recharger les panels persistants après redémarrage Railway
+        try:
+            from Tickets import TicketSelectView, TicketControls
+            self.add_view(TicketSelectView())
+            self.add_view(TicketControls())
+            Logger.success("Panels Tickets rechargés")
+        except Exception as e:
+            Logger.error(f"Erreur panels Tickets: {e}")
+
+        try:
+            from Whitelist import WhitelistPanel
+            self.add_view(WhitelistPanel())
+            Logger.success("Panel Whitelist rechargé")
+        except Exception as e:
+            Logger.error(f"Erreur panel Whitelist: {e}")
+
+        try:
+            from Roles import RolePanel
+            self.add_view(RolePanel())
+            Logger.success("Panel Roles rechargé")
+        except Exception as e:
+            Logger.error(f"Erreur panel Roles: {e}")
+
+        # Synchronisation des commandes slash
         guild_id = os.getenv("GUILD_ID")
 
         try:
@@ -69,6 +96,17 @@ class OkveHUBBot(commands.Bot):
         Logger.success(f"ID: {self.user.id}")
         Logger.success(f"Serveurs: {len(self.guilds)}")
         Logger.success("=" * 50)
+
+        try:
+            await self.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name="OkveHUB 🛡️"
+                ),
+                status=discord.Status.online
+            )
+        except:
+            pass
 
 
 async def main():
