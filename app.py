@@ -8,7 +8,7 @@ import asyncio
 import secrets
 from Bot import OkveHUBBot
 
-app = Flask(**name**)
+app = Flask(__name__)
 app.secret_key = os.getenv("ADMIN_SECRET", "okvehub_secret_123")
 
 DB_PATH = "okvehub.db"
