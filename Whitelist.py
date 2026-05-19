@@ -380,9 +380,8 @@ class Whitelist(commands.Cog):
         if not await check_permission(interaction, "staff"):
             return
 
-        await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
-        await remove_roles(utilisateur)
-
+await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
+await db_execute("DELETE FROM keys WHERE used_by=?", (str(utilisateur.id),))
         await send_wl_log(
             interaction.guild,
             "🗑️ Whitelist Removed",
