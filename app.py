@@ -4,6 +4,8 @@ import os
 import threading
 import asyncio
 import requests
+import secrets
+import time
 
 from Bot import OkveHUBBot
 
@@ -25,7 +27,7 @@ def protect():
 def init_db_site():
     conn = db()
 
-    conn.execute("""
+    conn.executescript("""
     CREATE TABLE IF NOT EXISTS whitelist (
         user_id TEXT PRIMARY KEY,
         username TEXT,
@@ -35,10 +37,8 @@ def init_db_site():
         script_access TEXT DEFAULT 'OkveHUB',
         expires_at INTEGER DEFAULT NULL,
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS keys (
         key_code TEXT PRIMARY KEY,
         script_name TEXT DEFAULT 'OkveHUB',
@@ -47,10 +47,8 @@ def init_db_site():
         expires_at INTEGER,
         status TEXT DEFAULT 'active',
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS scripts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE,
@@ -61,10 +59,8 @@ def init_db_site():
         code TEXT,
         executions INTEGER DEFAULT 0,
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS purchases (
         purchase_id TEXT PRIMARY KEY,
         user_id TEXT,
@@ -76,10 +72,8 @@ def init_db_site():
         created_at INTEGER DEFAULT (strftime('%s','now')),
         completed_at INTEGER,
         tx_hash TEXT
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS execution_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -90,10 +84,8 @@ def init_db_site():
         executor TEXT,
         status TEXT DEFAULT 'success',
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS hwid_resets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -101,28 +93,35 @@ def init_db_site():
         new_hwid TEXT,
         reset_by TEXT,
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS blacklist (
         user_id TEXT PRIMARY KEY,
         username TEXT,
         reason TEXT,
         added_by TEXT,
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
-    """)
+    );
 
-    conn.execute("""
     CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         type TEXT,
         user_id TEXT,
         message TEXT,
         created_at INTEGER DEFAULT (strftime('%s','now'))
-    )
+    );
     """)
+
+    for query in [
+        "ALTER TABLE keys ADD COLUMN expires_at INTEGER",
+        "ALTER TABLE keys ADD COLUMN status TEXT DEFAULT 'active'",
+        "ALTER TABLE scripts ADD COLUMN executions INTEGER DEFAULT 0",
+        "ALTER TABLE whitelist ADD COLUMN expires_at INTEGER DEFAULT NULL",
+    ]:
+        try:
+            conn.execute(query)
+        except:
+            pass
 
     conn.execute("""
     INSERT OR IGNORE INTO scripts
@@ -138,7 +137,7 @@ def init_db_site():
 STYLE = """
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#050816;color:white;font-family:Arial, sans-serif}
+body{background:#050816;color:white;font-family:Arial,sans-serif}
 .sidebar{position:fixed;left:0;top:0;width:270px;height:100vh;background:#0b1220;padding:24px;border-right:1px solid #1e293b}
 .logo{display:flex;align-items:center;gap:12px;margin-bottom:35px}
 .logo-icon{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#38bdf8,#6366f1);display:flex;align-items:center;justify-content:center;font-weight:bold}
@@ -159,8 +158,8 @@ tr:hover td{background:#111827}
 input,textarea,select{width:100%;padding:12px;border-radius:12px;border:1px solid #334155;background:#020617;color:white;margin:6px 0}
 textarea{font-family:Consolas,monospace}
 button{background:linear-gradient(135deg,#38bdf8,#6366f1);border:none;color:white;padding:12px 18px;border-radius:12px;font-weight:bold;cursor:pointer}
-a{color:#38bdf8}
-.badge{padding:6px 12px;border-radius:999px;font-size:13px;font-weight:bold}
+a{color:#38bdf8;text-decoration:none}
+.badge{display:inline-block;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:bold;margin:2px}
 .badge-success{background:#22c55e22;color:#22c55e}
 .badge-warning{background:#facc1522;color:#facc15}
 .badge-danger{background:#ef444422;color:#ef4444}
@@ -197,6 +196,7 @@ def layout(content):
 def login():
     client_id = os.getenv("DISCORD_CLIENT_ID")
     redirect_uri = os.getenv("DISCORD_REDIRECT_URI")
+
     url = (
         "https://discord.com/oauth2/authorize"
         f"?client_id={client_id}"
@@ -293,9 +293,7 @@ def scripts():
 
         if old_name:
             conn.execute("""
-            UPDATE scripts
-            SET name=?, description=?, code=?, active=1
-            WHERE name=?
+            UPDATE scripts SET name=?, description=?, code=?, active=1 WHERE name=?
             """, (name, description, code, old_name))
 
             conn.execute("UPDATE keys SET script_name=? WHERE script_name=?", (name, old_name))
@@ -381,6 +379,119 @@ def delete_script(script_name):
     return redirect("/scripts")
 
 
+@app.route("/keys", methods=["GET", "POST"])
+def keys():
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+
+    if request.method == "POST":
+        script_name = request.form.get("script_name", "OkveHUB")
+        duration = request.form.get("duration", "lifetime")
+
+        key_code = "OKV-" + secrets.token_hex(8).upper()
+        expires_at = None
+
+        if duration == "1d":
+            expires_at = int(time.time()) + 86400
+        elif duration == "7d":
+            expires_at = int(time.time()) + 604800
+        elif duration == "30d":
+            expires_at = int(time.time()) + 2592000
+
+        conn.execute("""
+        INSERT INTO keys (key_code, script_name, expires_at, status)
+        VALUES (?, ?, ?, 'active')
+        """, (key_code, script_name, expires_at))
+
+        conn.commit()
+
+    rows = conn.execute("SELECT * FROM keys ORDER BY created_at DESC").fetchall()
+    scripts_rows = conn.execute("SELECT name FROM scripts WHERE active=1 ORDER BY name").fetchall()
+    conn.close()
+
+    html = """
+    <div class="topbar"><h1>Keys</h1></div>
+
+    <div class="card">
+        <h2>Créer une key</h2>
+        <form method="post">
+            <select name="script_name">
+                {% for s in scripts_rows %}
+                <option value="{{s['name']}}">{{s['name']}}</option>
+                {% endfor %}
+            </select>
+
+            <select name="duration">
+                <option value="lifetime">Lifetime</option>
+                <option value="1d">1 jour</option>
+                <option value="7d">7 jours</option>
+                <option value="30d">30 jours</option>
+            </select>
+
+            <button>Créer la key</button>
+        </form>
+    </div>
+
+    <div class="table-card">
+    <table>
+        <tr><th>Key</th><th>Script</th><th>User</th><th>Status</th><th>Expire</th><th>Action</th></tr>
+        {% for k in rows %}
+        <tr>
+            <td>{{k["key_code"]}}</td>
+            <td>{{k["script_name"]}}</td>
+            <td>{{k["used_by"] or "Unused"}}</td>
+            <td>
+                {% if k["status"] == "active" %}
+                <span class="badge badge-success">Active</span>
+                {% else %}
+                <span class="badge badge-danger">Disabled</span>
+                {% endif %}
+            </td>
+            <td>{{k["expires_at"] or "Lifetime"}}</td>
+            <td>
+                <a class="badge badge-warning" href="/toggle-key/{{k['key_code']}}">Disable/Enable</a>
+                <a class="badge badge-danger" href="/delete-key/{{k['key_code']}}">Delete</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+    """
+    return layout(render_template_string(html, rows=rows, scripts_rows=scripts_rows))
+
+
+@app.route("/toggle-key/<key_code>")
+def toggle_key(key_code):
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    key = conn.execute("SELECT * FROM keys WHERE key_code=?", (key_code,)).fetchone()
+
+    if key:
+        new_status = "disabled" if key["status"] == "active" else "active"
+        conn.execute("UPDATE keys SET status=? WHERE key_code=?", (new_status, key_code))
+        conn.commit()
+
+    conn.close()
+    return redirect("/keys")
+
+
+@app.route("/delete-key/<key_code>")
+def delete_key(key_code):
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    conn.execute("DELETE FROM keys WHERE key_code=?", (key_code,))
+    conn.commit()
+    conn.close()
+
+    return redirect("/keys")
+
+
 @app.route("/whitelist")
 def whitelist():
     if not protect():
@@ -402,35 +513,6 @@ def whitelist():
             <td>{{u["script_access"]}}</td>
             <td>{{u["hwid"] or "None"}}</td>
             <td>{{u["expires_at"] or "Never"}}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    </div>
-    """
-    return layout(render_template_string(html, rows=rows))
-
-
-@app.route("/keys")
-def keys():
-    if not protect():
-        return redirect("/login")
-
-    conn = db()
-    rows = conn.execute("SELECT * FROM keys ORDER BY created_at DESC").fetchall()
-    conn.close()
-
-    html = """
-    <div class="topbar"><h1>Keys</h1></div>
-    <div class="table-card">
-    <table>
-        <tr><th>Key</th><th>Script</th><th>User</th><th>Status</th><th>Expires</th></tr>
-        {% for k in rows %}
-        <tr>
-            <td>{{k["key_code"]}}</td>
-            <td>{{k["script_name"]}}</td>
-            <td>{{k["used_by"] or "Unused"}}</td>
-            <td><span class="badge badge-success">{{k["status"] or "active"}}</span></td>
-            <td>{{k["expires_at"] or "Never"}}</td>
         </tr>
         {% endfor %}
     </table>
