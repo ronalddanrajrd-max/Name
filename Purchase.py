@@ -4,12 +4,13 @@ from discord.ext import commands
 import os
 import secrets
 import aiohttp
+import datetime
 
 from Database import db_execute, db_fetchone, db_fetchall
 from Helpers import *
 
 
-PRICE_DISPLAY = "5$ LTC"
+PRICE_DISPLAY = "0.05$ LTC"
 
 
 def make_loader(key_code: str):
@@ -94,19 +95,19 @@ async def whitelist_after_payment(interaction, purchase_id, script_name, tx_hash
     embed = discord.Embed(
         title="✅ Payment Confirmed",
         description=(
-            "Your purchase has been successfully completed.\n\n"
+            "Your payment has been detected and your access has been delivered.\n\n"
             f"**Script:** `{script_name}`\n"
             f"**Key:** `{key_code}`\n\n"
             f"```lua\n{loader}\n```"
         ),
         color=0x2ECC71
     )
-
     embed.set_footer(text="OkveHUB Secure Delivery")
+
     return embed
 
 
-async def check_ltc_payment(address: str, required_amount: float):
+async def check_ltc_payment(address: str, required_amount: float, created_at: int):
     url = f"https://api.blockcypher.com/v1/ltc/main/addrs/{address}/full?limit=50"
 
     async with aiohttp.ClientSession() as session:
@@ -120,6 +121,30 @@ async def check_ltc_payment(address: str, required_amount: float):
 
     for tx in data.get("txs", []):
         tx_hash = tx.get("hash")
+
+        tx_time = tx.get("confirmed") or tx.get("received")
+        if not tx_time:
+            continue
+
+        tx_timestamp = int(
+            datetime.datetime.fromisoformat(
+                tx_time.replace("Z", "+00:00")
+            ).timestamp()
+        )
+
+        # Important : ignore les anciennes transactions
+        if tx_timestamp < created_at:
+            continue
+
+        # Important : ignore les transactions déjà utilisées
+        used = await db_fetchone(
+            "SELECT * FROM purchases WHERE tx_hash=?",
+            (tx_hash,)
+        )
+
+        if used:
+            continue
+
         total_received = 0
 
         for out in tx.get("outputs", []):
@@ -140,7 +165,7 @@ class PurchaseCheckView(discord.ui.View):
     @discord.ui.button(
         label="✅ I Paid",
         style=discord.ButtonStyle.success,
-        custom_id="okvehub_purchase_check_v2"
+        custom_id="okvehub_purchase_check_secure"
     )
     async def check_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
         purchase = await db_fetchone(
@@ -189,14 +214,25 @@ class PurchaseCheckView(discord.ui.View):
         else:
             address = os.getenv("LTC_ADDRESS")
             amount = float(purchase["amount_ltc"])
-            tx_hash = await check_ltc_payment(address, amount)
+            created_at = int(purchase["created_at"])
+
+            if not address:
+                return await interaction.followup.send(
+                    "❌ LTC_ADDRESS is missing in Railway.",
+                    ephemeral=True
+                )
+
+            tx_hash = await check_ltc_payment(address, amount, created_at)
 
         if not tx_hash:
             fail_embed = discord.Embed(
                 title="⌛ Payment Still Pending",
                 description=(
                     "Payment was not detected yet.\n\n"
-                    "Please wait a few minutes, then click **I Paid** again.\n"
+                    "**Important:**\n"
+                    "• Make sure you sent the exact amount\n"
+                    "• Wait a few minutes for network confirmation\n"
+                    "• Click **I Paid** again after sending\n\n"
                     "If the issue continues, open a ticket."
                 ),
                 color=0xE67E22
@@ -255,11 +291,11 @@ class PurchasePanel(discord.ui.View):
     @discord.ui.button(
         label="💰 Buy with LTC",
         style=discord.ButtonStyle.success,
-        custom_id="okvehub_purchase_ltc_v2"
+        custom_id="okvehub_purchase_ltc_secure"
     )
     async def buy_ltc(self, interaction: discord.Interaction, button: discord.ui.Button):
         address = os.getenv("LTC_ADDRESS")
-        amount = float(os.getenv("LTC_AMOUNT", "0.01"))
+        amount = float(os.getenv("LTC_AMOUNT", "0.00092"))
         script_name = os.getenv("PURCHASE_SCRIPT", "main")
 
         if not address:
@@ -319,7 +355,7 @@ class PurchasePanel(discord.ui.View):
     @discord.ui.button(
         label="🧠 Buy with BrainDrop",
         style=discord.ButtonStyle.primary,
-        custom_id="okvehub_purchase_braindrop_v2"
+        custom_id="okvehub_purchase_braindrop_secure"
     )
     async def buy_braindrop(self, interaction: discord.Interaction, button: discord.ui.Button):
         username = os.getenv("BRAINDROP_USERNAME")
