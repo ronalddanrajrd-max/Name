@@ -12,14 +12,15 @@ async def init_db():
             added_by TEXT,
             reason TEXT,
             hwid TEXT,
-            script_access TEXT DEFAULT 'main',
+            script_access TEXT DEFAULT 'OkveHUB',
             expires_at INTEGER DEFAULT NULL,
             created_at INTEGER DEFAULT (strftime('%s','now'))
         );
 
         CREATE TABLE IF NOT EXISTS keys (
             key_code TEXT PRIMARY KEY,
-            script_name TEXT DEFAULT 'main',
+            script_name TEXT DEFAULT 'OkveHUB',
+            script_version TEXT DEFAULT 'stable',
             used_by TEXT,
             used_at INTEGER,
             expires_at INTEGER,
@@ -39,12 +40,23 @@ async def init_db():
             created_at INTEGER DEFAULT (strftime('%s','now'))
         );
 
+        CREATE TABLE IF NOT EXISTS script_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            script_name TEXT,
+            version_name TEXT DEFAULT 'stable',
+            code TEXT,
+            active INTEGER DEFAULT 1,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            UNIQUE(script_name, version_name)
+        );
+
         CREATE TABLE IF NOT EXISTS purchases (
             purchase_id TEXT PRIMARY KEY,
             user_id TEXT,
             username TEXT,
             method TEXT,
-            script_name TEXT DEFAULT 'main',
+            script_name TEXT DEFAULT 'OkveHUB',
+            script_version TEXT DEFAULT 'stable',
             amount_ltc REAL,
             status TEXT DEFAULT 'pending',
             created_at INTEGER DEFAULT (strftime('%s','now')),
@@ -57,6 +69,7 @@ async def init_db():
             user_id TEXT,
             key_code TEXT,
             script_name TEXT,
+            script_version TEXT DEFAULT 'stable',
             hwid TEXT,
             ip TEXT,
             executor TEXT,
@@ -101,11 +114,42 @@ async def init_db():
         );
         """)
 
+        for query in [
+            "ALTER TABLE keys ADD COLUMN script_version TEXT DEFAULT 'stable'",
+            "ALTER TABLE purchases ADD COLUMN script_version TEXT DEFAULT 'stable'",
+            "ALTER TABLE execution_logs ADD COLUMN script_version TEXT DEFAULT 'stable'",
+        ]:
+            try:
+                await db.execute(query)
+            except Exception:
+                pass
+
         await db.execute("""
         INSERT OR IGNORE INTO scripts
         (name, description, price, category, active, code, executions)
         VALUES
-        ('main', 'Script principal OkveHUB', 0, 'main', 1, 'print("OkveHUB Loaded")', 0)
+        ('OkveHUB', 'Script principal OkveHUB', 0, 'main', 1, 'print("OkveHUB Loaded")', 0)
+        """)
+
+        await db.execute("""
+        INSERT OR IGNORE INTO script_versions
+        (script_name, version_name, code, active)
+        VALUES
+        ('OkveHUB', 'stable', 'print("OkveHUB Stable Loaded")', 1)
+        """)
+
+        await db.execute("""
+        INSERT OR IGNORE INTO script_versions
+        (script_name, version_name, code, active)
+        VALUES
+        ('OkveHUB', 'beta', 'print("OkveHUB Beta Loaded")', 1)
+        """)
+
+        await db.execute("""
+        INSERT OR IGNORE INTO script_versions
+        (script_name, version_name, code, active)
+        VALUES
+        ('OkveHUB', 'dev', 'print("OkveHUB Dev Loaded")', 1)
         """)
 
         await db.commit()
