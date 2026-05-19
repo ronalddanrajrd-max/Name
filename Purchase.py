@@ -15,8 +15,11 @@ PRICE_DISPLAY = "0.05$ LTC"
 
 def make_loader(key_code: str):
     base_url = os.getenv("BASE_URL", "https://name-production-e582.up.railway.app").rstrip("/")
-    return f'''script_key="{key_code}";
-loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
+    return f'''local script_key = "{key_code}"
+local hwid = game:GetService("RbxAnalyticsService"):GetClientId()
+local executor = identifyexecutor and identifyexecutor() or "Unknown"
+
+loadstring(game:HttpGet("{base_url}/load?key=" .. script_key .. "&hwid=" .. hwid .. "&executor=" .. executor))()'''
 
 
 async def init_purchase_db():
