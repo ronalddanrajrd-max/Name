@@ -26,6 +26,7 @@ def protect():
 
 def init_db_site():
     conn = db()
+
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS whitelist (
         user_id TEXT PRIMARY KEY,
@@ -41,6 +42,7 @@ def init_db_site():
     CREATE TABLE IF NOT EXISTS keys (
         key_code TEXT PRIMARY KEY,
         script_name TEXT DEFAULT 'OkveHUB',
+        script_version TEXT DEFAULT 'stable',
         used_by TEXT,
         used_at INTEGER,
         expires_at INTEGER,
@@ -60,12 +62,23 @@ def init_db_site():
         created_at INTEGER DEFAULT (strftime('%s','now'))
     );
 
+    CREATE TABLE IF NOT EXISTS script_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        script_name TEXT,
+        version_name TEXT DEFAULT 'stable',
+        code TEXT,
+        active INTEGER DEFAULT 1,
+        created_at INTEGER DEFAULT (strftime('%s','now')),
+        UNIQUE(script_name, version_name)
+    );
+
     CREATE TABLE IF NOT EXISTS purchases (
         purchase_id TEXT PRIMARY KEY,
         user_id TEXT,
         username TEXT,
         method TEXT,
         script_name TEXT DEFAULT 'OkveHUB',
+        script_version TEXT DEFAULT 'stable',
         amount_ltc REAL,
         status TEXT DEFAULT 'pending',
         created_at INTEGER DEFAULT (strftime('%s','now')),
@@ -78,6 +91,7 @@ def init_db_site():
         user_id TEXT,
         key_code TEXT,
         script_name TEXT,
+        script_version TEXT DEFAULT 'stable',
         hwid TEXT,
         ip TEXT,
         executor TEXT,
@@ -112,6 +126,9 @@ def init_db_site():
     """)
 
     for q in [
+        "ALTER TABLE keys ADD COLUMN script_version TEXT DEFAULT 'stable'",
+        "ALTER TABLE purchases ADD COLUMN script_version TEXT DEFAULT 'stable'",
+        "ALTER TABLE execution_logs ADD COLUMN script_version TEXT DEFAULT 'stable'",
         "ALTER TABLE keys ADD COLUMN expires_at INTEGER",
         "ALTER TABLE keys ADD COLUMN status TEXT DEFAULT 'active'",
         "ALTER TABLE scripts ADD COLUMN executions INTEGER DEFAULT 0",
@@ -129,6 +146,17 @@ def init_db_site():
     ('OkveHUB', 'Script principal OkveHUB', 0, 'main', 1, 'print("OkveHUB Loaded")', 0)
     """)
 
+    for version in ["stable", "beta", "dev"]:
+        conn.execute("""
+        INSERT OR IGNORE INTO script_versions
+        (script_name, version_name, code, active)
+        VALUES (?, ?, ?, 1)
+        """, (
+            "OkveHUB",
+            version,
+            f'print("OkveHUB {version} Loaded")'
+        ))
+
     conn.commit()
     conn.close()
 
@@ -137,7 +165,7 @@ STYLE = """
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#050816;color:white;font-family:Arial,sans-serif}
-.sidebar{position:fixed;left:0;top:0;width:270px;height:100vh;background:#0b1220;padding:24px;border-right:1px solid #1e293b}
+.sidebar{position:fixed;left:0;top:0;width:270px;height:100vh;background:#0b1220;padding:24px;border-right:1px solid #1e293b;overflow-y:auto}
 .logo{display:flex;align-items:center;gap:12px;margin-bottom:35px}
 .logo-icon{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#38bdf8,#6366f1);display:flex;align-items:center;justify-content:center;font-weight:bold}
 .logo h2{font-size:22px}
@@ -177,6 +205,7 @@ def layout(content):
         <a href="/whitelist">🔐 Whitelist</a>
         <a href="/keys">🔑 Keys</a>
         <a href="/scripts">📜 Scripts</a>
+        <a href="/versions">🧪 Versions</a>
         <a href="/purchases">🛒 Purchases</a>
         <a href="/executions">🧠 Executions</a>
         <a href="/hwid-resets">⚙️ HWID Resets</a>
@@ -192,7 +221,6 @@ def layout(content):
 def login():
     client_id = os.getenv("DISCORD_CLIENT_ID")
     redirect_uri = os.getenv("DISCORD_REDIRECT_URI")
-
     url = (
         "https://discord.com/oauth2/authorize"
         f"?client_id={client_id}"
@@ -252,6 +280,7 @@ def home():
     whitelist_count = conn.execute("SELECT COUNT(*) c FROM whitelist").fetchone()["c"]
     keys_count = conn.execute("SELECT COUNT(*) c FROM keys").fetchone()["c"]
     scripts_count = conn.execute("SELECT COUNT(*) c FROM scripts WHERE active=1").fetchone()["c"]
+    versions_count = conn.execute("SELECT COUNT(*) c FROM script_versions WHERE active=1").fetchone()["c"]
     purchases_count = conn.execute("SELECT COUNT(*) c FROM purchases").fetchone()["c"]
     executions_count = conn.execute("SELECT COUNT(*) c FROM execution_logs").fetchone()["c"]
     blacklist_count = conn.execute("SELECT COUNT(*) c FROM blacklist").fetchone()["c"]
@@ -263,243 +292,12 @@ def home():
         <div class="card"><div class="stat-title">Whitelist Users</div><div class="stat-number">{whitelist_count}</div></div>
         <div class="card"><div class="stat-title">Keys</div><div class="stat-number">{keys_count}</div></div>
         <div class="card"><div class="stat-title">Scripts</div><div class="stat-number">{scripts_count}</div></div>
+        <div class="card"><div class="stat-title">Versions</div><div class="stat-number">{versions_count}</div></div>
         <div class="card"><div class="stat-title">Purchases</div><div class="stat-number">{purchases_count}</div></div>
         <div class="card"><div class="stat-title">Executions</div><div class="stat-number">{executions_count}</div></div>
         <div class="card"><div class="stat-title">Blacklist</div><div class="stat-number">{blacklist_count}</div></div>
     </div>
     """)
-
-
-@app.route("/analytics")
-def analytics():
-    if not protect():
-        return redirect("/login")
-
-    conn = db()
-
-    total_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs").fetchone()["c"]
-    success_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs WHERE status='success'").fetchone()["c"]
-    blocked_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs WHERE status!='success'").fetchone()["c"]
-
-    top_users = conn.execute("""
-        SELECT user_id, COUNT(*) total
-        FROM execution_logs
-        GROUP BY user_id
-        ORDER BY total DESC
-        LIMIT 10
-    """).fetchall()
-
-    top_scripts = conn.execute("""
-        SELECT script_name, COUNT(*) total
-        FROM execution_logs
-        GROUP BY script_name
-        ORDER BY total DESC
-        LIMIT 10
-    """).fetchall()
-
-    top_executors = conn.execute("""
-        SELECT executor, COUNT(*) total
-        FROM execution_logs
-        GROUP BY executor
-        ORDER BY total DESC
-        LIMIT 10
-    """).fetchall()
-
-    recent_logs = conn.execute("""
-        SELECT *
-        FROM execution_logs
-        ORDER BY created_at DESC
-        LIMIT 20
-    """).fetchall()
-
-    conn.close()
-
-    html = """
-    <div class="topbar"><h1>Analytics</h1></div>
-
-    <div class="grid">
-        <div class="card"><div class="stat-title">Total Executions</div><div class="stat-number">{{total_exec}}</div></div>
-        <div class="card"><div class="stat-title">Successful</div><div class="stat-number">{{success_exec}}</div></div>
-        <div class="card"><div class="stat-title">Blocked</div><div class="stat-number">{{blocked_exec}}</div></div>
-    </div>
-
-    <div class="grid">
-        <div class="table-card">
-            <h2>Top Users</h2>
-            <table>
-                <tr><th>User ID</th><th>Executions</th></tr>
-                {% for u in top_users %}
-                <tr><td>{{u["user_id"]}}</td><td>{{u["total"]}}</td></tr>
-                {% endfor %}
-            </table>
-        </div>
-
-        <div class="table-card">
-            <h2>Top Scripts</h2>
-            <table>
-                <tr><th>Script</th><th>Executions</th></tr>
-                {% for s in top_scripts %}
-                <tr><td>{{s["script_name"]}}</td><td>{{s["total"]}}</td></tr>
-                {% endfor %}
-            </table>
-        </div>
-    </div>
-
-    <div class="table-card">
-        <h2>Top Executors</h2>
-        <table>
-            <tr><th>Executor</th><th>Executions</th></tr>
-            {% for e in top_executors %}
-            <tr><td>{{e["executor"] or "Unknown"}}</td><td>{{e["total"]}}</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-
-    <div class="table-card">
-        <h2>Recent Executions</h2>
-        <table>
-            <tr><th>User</th><th>Key</th><th>Script</th><th>HWID</th><th>Executor</th><th>Status</th></tr>
-            {% for log in recent_logs %}
-            <tr>
-                <td>{{log["user_id"]}}</td>
-                <td>{{log["key_code"]}}</td>
-                <td>{{log["script_name"]}}</td>
-                <td>{{log["hwid"] or "None"}}</td>
-                <td>{{log["executor"] or "Unknown"}}</td>
-                <td>
-                    {% if log["status"] == "success" %}
-                    <span class="badge badge-success">Success</span>
-                    {% else %}
-                    <span class="badge badge-danger">{{log["status"]}}</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </table>
-    </div>
-    """
-
-    return layout(render_template_string(
-        html,
-        total_exec=total_exec,
-        success_exec=success_exec,
-        blocked_exec=blocked_exec,
-        top_users=top_users,
-        top_scripts=top_scripts,
-        top_executors=top_executors,
-        recent_logs=recent_logs
-    ))
-
-
-@app.route("/users")
-def users():
-    if not protect():
-        return redirect("/login")
-
-    conn = db()
-    rows = conn.execute("""
-    SELECT 
-        whitelist.user_id,
-        whitelist.username,
-        whitelist.hwid,
-        whitelist.script_access,
-        whitelist.expires_at,
-        keys.key_code,
-        keys.status,
-        COUNT(execution_logs.id) as executions
-    FROM whitelist
-    LEFT JOIN keys ON keys.used_by = whitelist.user_id
-    LEFT JOIN execution_logs ON execution_logs.user_id = whitelist.user_id
-    GROUP BY whitelist.user_id
-    ORDER BY whitelist.created_at DESC
-    """).fetchall()
-    conn.close()
-
-    html = """
-    <div class="topbar"><h1>Users</h1></div>
-    <div class="table-card">
-    <table>
-        <tr><th>User</th><th>Script</th><th>Key</th><th>HWID</th><th>Executions</th><th>Expires</th><th>Status</th><th>Actions</th></tr>
-        {% for u in rows %}
-        <tr>
-            <td>{{u["username"]}}<br><small>{{u["user_id"]}}</small></td>
-            <td>{{u["script_access"]}}</td>
-            <td>{{u["key_code"] or "No key"}}</td>
-            <td>{{u["hwid"] or "Not assigned"}}</td>
-            <td>{{u["executions"]}}</td>
-            <td>{{u["expires_at"] or "Lifetime"}}</td>
-            <td>{{u["status"] or "Unknown"}}</td>
-            <td>
-                <a class="badge badge-warning" href="/user-reset-hwid/{{u['user_id']}}">Reset HWID</a>
-                <a class="badge badge-danger" href="/user-ban/{{u['user_id']}}">Ban</a>
-                <a class="badge badge-danger" href="/user-delete/{{u['user_id']}}">Delete</a>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
-    </div>
-    """
-    return layout(render_template_string(html, rows=rows))
-
-
-@app.route("/user-reset-hwid/<user_id>")
-def user_reset_hwid(user_id):
-    if not protect():
-        return redirect("/login")
-
-    conn = db()
-    user = conn.execute("SELECT * FROM whitelist WHERE user_id=?", (user_id,)).fetchone()
-    old_hwid = user["hwid"] if user else None
-
-    conn.execute("UPDATE whitelist SET hwid=NULL WHERE user_id=?", (user_id,))
-    conn.execute("""
-    INSERT INTO hwid_resets (user_id, old_hwid, new_hwid, reset_by)
-    VALUES (?, ?, ?, ?)
-    """, (user_id, old_hwid, None, session.get("discord_id", "site")))
-
-    conn.commit()
-    conn.close()
-    return redirect("/users")
-
-
-@app.route("/user-ban/<user_id>")
-def user_ban(user_id):
-    if not protect():
-        return redirect("/login")
-
-    conn = db()
-    user = conn.execute("SELECT * FROM whitelist WHERE user_id=?", (user_id,)).fetchone()
-    username = user["username"] if user else "Unknown"
-
-    conn.execute("""
-    INSERT INTO blacklist (user_id, username, reason, added_by)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-        username=excluded.username,
-        reason=excluded.reason,
-        added_by=excluded.added_by
-    """, (user_id, username, "Banned from site", session.get("discord_id", "site")))
-
-    conn.execute("DELETE FROM whitelist WHERE user_id=?", (user_id,))
-    conn.execute("UPDATE keys SET status='disabled' WHERE used_by=?", (user_id,))
-    conn.commit()
-    conn.close()
-    return redirect("/users")
-
-
-@app.route("/user-delete/<user_id>")
-def user_delete(user_id):
-    if not protect():
-        return redirect("/login")
-
-    conn = db()
-    conn.execute("DELETE FROM whitelist WHERE user_id=?", (user_id,))
-    conn.execute("DELETE FROM keys WHERE used_by=?", (user_id,))
-    conn.execute("DELETE FROM execution_logs WHERE user_id=?", (user_id,))
-    conn.execute("DELETE FROM hwid_resets WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-    return redirect("/users")
 
 
 @app.route("/scripts", methods=["GET", "POST"])
@@ -523,12 +321,19 @@ def scripts():
             conn.execute("UPDATE keys SET script_name=? WHERE script_name=?", (name, old_name))
             conn.execute("UPDATE whitelist SET script_access=? WHERE script_access=?", (name, old_name))
             conn.execute("UPDATE purchases SET script_name=? WHERE script_name=?", (name, old_name))
+            conn.execute("UPDATE script_versions SET script_name=? WHERE script_name=?", (name, old_name))
         else:
             conn.execute("""
             INSERT INTO scripts (name, description, active, code, executions)
             VALUES (?, ?, 1, ?, 0)
             ON CONFLICT(name) DO UPDATE SET description=excluded.description, code=excluded.code, active=1
             """, (name, description, code))
+
+            for version in ["stable", "beta", "dev"]:
+                conn.execute("""
+                INSERT OR IGNORE INTO script_versions (script_name, version_name, code, active)
+                VALUES (?, ?, ?, 1)
+                """, (name, version, f'print("{name} {version} Loaded")'))
 
         conn.commit()
 
@@ -542,14 +347,14 @@ def scripts():
         <form method="post">
             <input name="name" placeholder="Nom du script" value="OkveHUB" required>
             <input name="description" placeholder="Description du script">
-            <textarea name="code" rows="12" placeholder="Colle ton script Lua ici"></textarea>
+            <textarea name="code" rows="8" placeholder="Code fallback du script"></textarea>
             <button>Ajouter / Enregistrer</button>
         </form>
     </div>
 
     <div class="table-card">
     <table>
-        <tr><th>Nom</th><th>Description</th><th>Executions</th><th>Code / Modifier</th><th>Supprimer</th></tr>
+        <tr><th>Nom</th><th>Description</th><th>Executions</th><th>Modifier</th><th>Supprimer</th></tr>
         {% for s in rows %}
         <tr>
             <form method="post">
@@ -557,7 +362,7 @@ def scripts():
                 <td><input name="name" value="{{s['name']}}"></td>
                 <td><input name="description" value="{{s['description'] or ''}}"></td>
                 <td>{{s["executions"] or 0}}</td>
-                <td><textarea name="code" rows="5">{{s["code"] or ""}}</textarea><button>Modifier</button></td>
+                <td><textarea name="code" rows="4">{{s["code"] or ""}}</textarea><button>Modifier</button></td>
                 <td>
                     {% if s["name"] != "OkveHUB" %}
                     <a class="badge badge-danger" href="/delete-script/{{s['name']}}">Supprimer</a>
@@ -582,10 +387,102 @@ def delete_script(script_name):
     if script_name != "OkveHUB":
         conn = db()
         conn.execute("UPDATE scripts SET active=0 WHERE name=?", (script_name,))
+        conn.execute("UPDATE script_versions SET active=0 WHERE script_name=?", (script_name,))
         conn.commit()
         conn.close()
 
     return redirect("/scripts")
+
+
+@app.route("/versions", methods=["GET", "POST"])
+def versions():
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+
+    if request.method == "POST":
+        script_name = request.form.get("script_name", "OkveHUB")
+        version_name = request.form.get("version_name", "stable")
+        code = request.form.get("code", "")
+
+        conn.execute("""
+        INSERT INTO script_versions (script_name, version_name, code, active)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT(script_name, version_name) DO UPDATE SET
+            code=excluded.code,
+            active=1
+        """, (script_name, version_name, code))
+
+        conn.commit()
+
+    scripts_rows = conn.execute("SELECT name FROM scripts WHERE active=1 ORDER BY name").fetchall()
+    rows = conn.execute("SELECT * FROM script_versions WHERE active=1 ORDER BY script_name, version_name").fetchall()
+    conn.close()
+
+    html = """
+    <div class="topbar"><h1>Versions</h1></div>
+
+    <div class="card">
+        <h2>Ajouter / Modifier une version</h2>
+        <form method="post">
+            <select name="script_name">
+                {% for s in scripts_rows %}
+                <option value="{{s['name']}}">{{s['name']}}</option>
+                {% endfor %}
+            </select>
+
+            <select name="version_name">
+                <option value="stable">stable</option>
+                <option value="beta">beta</option>
+                <option value="dev">dev</option>
+            </select>
+
+            <textarea name="code" rows="12" placeholder="Code Lua de cette version"></textarea>
+            <button>Enregistrer la version</button>
+        </form>
+    </div>
+
+    <div class="table-card">
+    <table>
+        <tr><th>Script</th><th>Version</th><th>Code</th><th>Action</th></tr>
+        {% for v in rows %}
+        <tr>
+            <form method="post">
+                <td>
+                    {{v["script_name"]}}
+                    <input type="hidden" name="script_name" value="{{v['script_name']}}">
+                </td>
+                <td>
+                    {{v["version_name"]}}
+                    <input type="hidden" name="version_name" value="{{v['version_name']}}">
+                </td>
+                <td>
+                    <textarea name="code" rows="5">{{v["code"] or ""}}</textarea>
+                    <button>Modifier</button>
+                </td>
+                <td>
+                    <a class="badge badge-danger" href="/delete-version/{{v['id']}}">Delete</a>
+                </td>
+            </form>
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+    """
+    return layout(render_template_string(html, rows=rows, scripts_rows=scripts_rows))
+
+
+@app.route("/delete-version/<version_id>")
+def delete_version(version_id):
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    conn.execute("UPDATE script_versions SET active=0 WHERE id=?", (version_id,))
+    conn.commit()
+    conn.close()
+    return redirect("/versions")
 
 
 @app.route("/keys", methods=["GET", "POST"])
@@ -597,6 +494,7 @@ def keys():
 
     if request.method == "POST":
         script_name = request.form.get("script_name", "OkveHUB")
+        script_version = request.form.get("script_version", "stable")
         duration = request.form.get("duration", "lifetime")
         key_code = "OKV-" + secrets.token_hex(8).upper()
 
@@ -608,10 +506,11 @@ def keys():
         elif duration == "30d":
             expires_at = int(time.time()) + 2592000
 
-        conn.execute(
-            "INSERT INTO keys (key_code, script_name, expires_at, status) VALUES (?, ?, ?, 'active')",
-            (key_code, script_name, expires_at)
-        )
+        conn.execute("""
+        INSERT INTO keys (key_code, script_name, script_version, expires_at, status)
+        VALUES (?, ?, ?, ?, 'active')
+        """, (key_code, script_name, script_version, expires_at))
+
         conn.commit()
 
     rows = conn.execute("SELECT * FROM keys ORDER BY created_at DESC").fetchall()
@@ -628,23 +527,32 @@ def keys():
                 <option value="{{s['name']}}">{{s['name']}}</option>
                 {% endfor %}
             </select>
+
+            <select name="script_version">
+                <option value="stable">stable</option>
+                <option value="beta">beta</option>
+                <option value="dev">dev</option>
+            </select>
+
             <select name="duration">
                 <option value="lifetime">Lifetime</option>
                 <option value="1d">1 jour</option>
                 <option value="7d">7 jours</option>
                 <option value="30d">30 jours</option>
             </select>
+
             <button>Créer la key</button>
         </form>
     </div>
 
     <div class="table-card">
     <table>
-        <tr><th>Key</th><th>Script</th><th>User</th><th>Status</th><th>Expire</th><th>Action</th></tr>
+        <tr><th>Key</th><th>Script</th><th>Version</th><th>User</th><th>Status</th><th>Expire</th><th>Action</th></tr>
         {% for k in rows %}
         <tr>
             <td>{{k["key_code"]}}</td>
             <td>{{k["script_name"]}}</td>
+            <td>{{k["script_version"] or "stable"}}</td>
             <td>{{k["used_by"] or "Unused"}}</td>
             <td>{{k["status"] or "active"}}</td>
             <td>{{k["expires_at"] or "Lifetime"}}</td>
@@ -688,6 +596,193 @@ def delete_key(key_code):
     return redirect("/keys")
 
 
+@app.route("/analytics")
+def analytics():
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    total_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs").fetchone()["c"]
+    success_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs WHERE status='success'").fetchone()["c"]
+    blocked_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs WHERE status!='success'").fetchone()["c"]
+
+    top_users = conn.execute("""
+        SELECT user_id, COUNT(*) total FROM execution_logs
+        GROUP BY user_id ORDER BY total DESC LIMIT 10
+    """).fetchall()
+
+    top_scripts = conn.execute("""
+        SELECT script_name, script_version, COUNT(*) total FROM execution_logs
+        GROUP BY script_name, script_version ORDER BY total DESC LIMIT 10
+    """).fetchall()
+
+    top_executors = conn.execute("""
+        SELECT executor, COUNT(*) total FROM execution_logs
+        GROUP BY executor ORDER BY total DESC LIMIT 10
+    """).fetchall()
+
+    recent_logs = conn.execute("SELECT * FROM execution_logs ORDER BY created_at DESC LIMIT 20").fetchall()
+    conn.close()
+
+    html = """
+    <div class="topbar"><h1>Analytics</h1></div>
+    <div class="grid">
+        <div class="card"><div class="stat-title">Total Executions</div><div class="stat-number">{{total_exec}}</div></div>
+        <div class="card"><div class="stat-title">Successful</div><div class="stat-number">{{success_exec}}</div></div>
+        <div class="card"><div class="stat-title">Blocked</div><div class="stat-number">{{blocked_exec}}</div></div>
+    </div>
+
+    <div class="grid">
+        <div class="table-card">
+            <h2>Top Users</h2>
+            <table><tr><th>User</th><th>Exec</th></tr>
+            {% for u in top_users %}<tr><td>{{u["user_id"]}}</td><td>{{u["total"]}}</td></tr>{% endfor %}
+            </table>
+        </div>
+
+        <div class="table-card">
+            <h2>Top Scripts</h2>
+            <table><tr><th>Script</th><th>Version</th><th>Exec</th></tr>
+            {% for s in top_scripts %}<tr><td>{{s["script_name"]}}</td><td>{{s["script_version"]}}</td><td>{{s["total"]}}</td></tr>{% endfor %}
+            </table>
+        </div>
+    </div>
+
+    <div class="table-card">
+        <h2>Top Executors</h2>
+        <table><tr><th>Executor</th><th>Exec</th></tr>
+        {% for e in top_executors %}<tr><td>{{e["executor"] or "Unknown"}}</td><td>{{e["total"]}}</td></tr>{% endfor %}
+        </table>
+    </div>
+
+    <div class="table-card">
+        <h2>Recent Executions</h2>
+        <table>
+        <tr><th>User</th><th>Key</th><th>Script</th><th>Version</th><th>HWID</th><th>Executor</th><th>Status</th></tr>
+        {% for log in recent_logs %}
+        <tr>
+            <td>{{log["user_id"]}}</td>
+            <td>{{log["key_code"]}}</td>
+            <td>{{log["script_name"]}}</td>
+            <td>{{log["script_version"] or "stable"}}</td>
+            <td>{{log["hwid"] or "None"}}</td>
+            <td>{{log["executor"] or "Unknown"}}</td>
+            <td>{{log["status"]}}</td>
+        </tr>
+        {% endfor %}
+        </table>
+    </div>
+    """
+    return layout(render_template_string(html, **locals()))
+
+
+@app.route("/users")
+def users():
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    rows = conn.execute("""
+    SELECT 
+        whitelist.user_id,
+        whitelist.username,
+        whitelist.hwid,
+        whitelist.script_access,
+        whitelist.expires_at,
+        keys.key_code,
+        keys.status,
+        keys.script_version,
+        COUNT(execution_logs.id) as executions
+    FROM whitelist
+    LEFT JOIN keys ON keys.used_by = whitelist.user_id
+    LEFT JOIN execution_logs ON execution_logs.user_id = whitelist.user_id
+    GROUP BY whitelist.user_id
+    ORDER BY whitelist.created_at DESC
+    """).fetchall()
+    conn.close()
+
+    html = """
+    <div class="topbar"><h1>Users</h1></div>
+    <div class="table-card">
+    <table>
+        <tr><th>User</th><th>Script</th><th>Version</th><th>Key</th><th>HWID</th><th>Executions</th><th>Expires</th><th>Status</th><th>Actions</th></tr>
+        {% for u in rows %}
+        <tr>
+            <td>{{u["username"]}}<br><small>{{u["user_id"]}}</small></td>
+            <td>{{u["script_access"]}}</td>
+            <td>{{u["script_version"] or "stable"}}</td>
+            <td>{{u["key_code"] or "No key"}}</td>
+            <td>{{u["hwid"] or "Not assigned"}}</td>
+            <td>{{u["executions"]}}</td>
+            <td>{{u["expires_at"] or "Lifetime"}}</td>
+            <td>{{u["status"] or "Unknown"}}</td>
+            <td>
+                <a class="badge badge-warning" href="/user-reset-hwid/{{u['user_id']}}">Reset HWID</a>
+                <a class="badge badge-danger" href="/user-ban/{{u['user_id']}}">Ban</a>
+                <a class="badge badge-danger" href="/user-delete/{{u['user_id']}}">Delete</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+    """
+    return layout(render_template_string(html, rows=rows))
+
+
+@app.route("/user-reset-hwid/<user_id>")
+def user_reset_hwid(user_id):
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    user = conn.execute("SELECT * FROM whitelist WHERE user_id=?", (user_id,)).fetchone()
+    old_hwid = user["hwid"] if user else None
+
+    conn.execute("UPDATE whitelist SET hwid=NULL WHERE user_id=?", (user_id,))
+    conn.execute("INSERT INTO hwid_resets (user_id, old_hwid, new_hwid, reset_by) VALUES (?, ?, ?, ?)",
+                 (user_id, old_hwid, None, session.get("discord_id", "site")))
+    conn.commit()
+    conn.close()
+    return redirect("/users")
+
+
+@app.route("/user-ban/<user_id>")
+def user_ban(user_id):
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    user = conn.execute("SELECT * FROM whitelist WHERE user_id=?", (user_id,)).fetchone()
+    username = user["username"] if user else "Unknown"
+
+    conn.execute("""
+    INSERT INTO blacklist (user_id, username, reason, added_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, reason=excluded.reason, added_by=excluded.added_by
+    """, (user_id, username, "Banned from site", session.get("discord_id", "site")))
+
+    conn.execute("DELETE FROM whitelist WHERE user_id=?", (user_id,))
+    conn.execute("UPDATE keys SET status='disabled' WHERE used_by=?", (user_id,))
+    conn.commit()
+    conn.close()
+    return redirect("/users")
+
+
+@app.route("/user-delete/<user_id>")
+def user_delete(user_id):
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+    conn.execute("DELETE FROM whitelist WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM keys WHERE used_by=?", (user_id,))
+    conn.execute("DELETE FROM execution_logs WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM hwid_resets WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+    return redirect("/users")
+
+
 @app.route("/whitelist")
 def whitelist():
     if not protect():
@@ -703,9 +798,7 @@ def whitelist():
     <table>
         <tr><th>User ID</th><th>Username</th><th>Script</th><th>HWID</th><th>Expires</th></tr>
         {% for u in rows %}
-        <tr>
-            <td>{{u["user_id"]}}</td><td>{{u["username"]}}</td><td>{{u["script_access"]}}</td><td>{{u["hwid"] or "None"}}</td><td>{{u["expires_at"] or "Never"}}</td>
-        </tr>
+        <tr><td>{{u["user_id"]}}</td><td>{{u["username"]}}</td><td>{{u["script_access"]}}</td><td>{{u["hwid"] or "None"}}</td><td>{{u["expires_at"] or "Never"}}</td></tr>
         {% endfor %}
     </table>
     </div>
@@ -726,10 +819,10 @@ def purchases():
     <div class="topbar"><h1>Purchases</h1></div>
     <div class="table-card">
     <table>
-        <tr><th>ID</th><th>User</th><th>Method</th><th>Script</th><th>Amount</th><th>Status</th><th>TX</th></tr>
+        <tr><th>ID</th><th>User</th><th>Method</th><th>Script</th><th>Version</th><th>Amount</th><th>Status</th><th>TX</th></tr>
         {% for p in rows %}
         <tr>
-            <td>{{p["purchase_id"]}}</td><td>{{p["username"]}}</td><td>{{p["method"]}}</td><td>{{p["script_name"]}}</td><td>{{p["amount_ltc"]}}</td>
+            <td>{{p["purchase_id"]}}</td><td>{{p["username"]}}</td><td>{{p["method"]}}</td><td>{{p["script_name"]}}</td><td>{{p["script_version"] or "stable"}}</td><td>{{p["amount_ltc"]}}</td>
             <td>{% if p["status"] == "completed" %}<span class="badge badge-success">Completed</span>{% else %}<span class="badge badge-warning">Pending</span>{% endif %}</td>
             <td>{{p["tx_hash"] or "None"}}</td>
         </tr>
@@ -753,10 +846,10 @@ def executions():
     <div class="topbar"><h1>Executions</h1></div>
     <div class="table-card">
     <table>
-        <tr><th>User</th><th>Key</th><th>Script</th><th>HWID</th><th>Executor</th><th>Status</th></tr>
+        <tr><th>User</th><th>Key</th><th>Script</th><th>Version</th><th>HWID</th><th>Executor</th><th>Status</th></tr>
         {% for e in rows %}
         <tr>
-            <td>{{e["user_id"]}}</td><td>{{e["key_code"]}}</td><td>{{e["script_name"]}}</td><td>{{e["hwid"] or "None"}}</td><td>{{e["executor"] or "Unknown"}}</td><td>{{e["status"]}}</td>
+            <td>{{e["user_id"]}}</td><td>{{e["key_code"]}}</td><td>{{e["script_name"]}}</td><td>{{e["script_version"] or "stable"}}</td><td>{{e["hwid"] or "None"}}</td><td>{{e["executor"] or "Unknown"}}</td><td>{{e["status"]}}</td>
         </tr>
         {% endfor %}
     </table>
@@ -780,9 +873,7 @@ def hwid_resets():
     <table>
         <tr><th>User</th><th>Old HWID</th><th>New HWID</th><th>Reset by</th></tr>
         {% for r in rows %}
-        <tr>
-            <td>{{r["user_id"]}}</td><td>{{r["old_hwid"] or "None"}}</td><td>{{r["new_hwid"] or "None"}}</td><td>{{r["reset_by"]}}</td>
-        </tr>
+        <tr><td>{{r["user_id"]}}</td><td>{{r["old_hwid"] or "None"}}</td><td>{{r["new_hwid"] or "None"}}</td><td>{{r["reset_by"]}}</td></tr>
         {% endfor %}
     </table>
     </div>
@@ -805,9 +896,7 @@ def blacklist():
     <table>
         <tr><th>User ID</th><th>Username</th><th>Reason</th><th>Added by</th></tr>
         {% for b in rows %}
-        <tr>
-            <td>{{b["user_id"]}}</td><td>{{b["username"]}}</td><td>{{b["reason"]}}</td><td>{{b["added_by"]}}</td>
-        </tr>
+        <tr><td>{{b["user_id"]}}</td><td>{{b["username"]}}</td><td>{{b["reason"]}}</td><td>{{b["added_by"]}}</td></tr>
         {% endfor %}
     </table>
     </div>
@@ -862,6 +951,7 @@ def load_script():
 
     user_id = key_row["used_by"]
     script_name = key_row["script_name"] or "OkveHUB"
+    script_version = key_row["script_version"] or "stable"
 
     wl = conn.execute("SELECT * FROM whitelist WHERE user_id=?", (user_id,)).fetchone()
     if not wl:
@@ -870,9 +960,9 @@ def load_script():
 
     if wl["hwid"] and hwid and wl["hwid"] != hwid:
         conn.execute("""
-        INSERT INTO execution_logs (user_id, key_code, script_name, hwid, ip, executor, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, key, script_name, hwid, ip, executor, "blocked_hwid"))
+        INSERT INTO execution_logs (user_id, key_code, script_name, script_version, hwid, ip, executor, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, key, script_name, script_version, hwid, ip, executor, "blocked_hwid"))
         conn.commit()
         conn.close()
         return "print('HWID mismatch')", 200, {"Content-Type": "text/plain"}
@@ -880,20 +970,30 @@ def load_script():
     if not wl["hwid"] and hwid:
         conn.execute("UPDATE whitelist SET hwid=? WHERE user_id=?", (hwid, user_id))
 
-    script = conn.execute("SELECT * FROM scripts WHERE name=? AND active=1", (script_name,)).fetchone()
-    if not script:
-        conn.close()
-        return "print('Script not found')", 200, {"Content-Type": "text/plain"}
+    version = conn.execute("""
+    SELECT * FROM script_versions 
+    WHERE script_name=? AND version_name=? AND active=1
+    """, (script_name, script_version)).fetchone()
+
+    if version:
+        code = version["code"]
+    else:
+        script = conn.execute("SELECT * FROM scripts WHERE name=? AND active=1", (script_name,)).fetchone()
+        if not script:
+            conn.close()
+            return "print('Script not found')", 200, {"Content-Type": "text/plain"}
+        code = script["code"]
 
     conn.execute("UPDATE scripts SET executions = COALESCE(executions,0) + 1 WHERE name=?", (script_name,))
     conn.execute("""
-    INSERT INTO execution_logs (user_id, key_code, script_name, hwid, ip, executor, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, key, script_name, hwid, ip, executor, "success"))
+    INSERT INTO execution_logs (user_id, key_code, script_name, script_version, hwid, ip, executor, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, key, script_name, script_version, hwid, ip, executor, "success"))
 
     conn.commit()
     conn.close()
-    return script["code"] or "print('Empty script')", 200, {"Content-Type": "text/plain"}
+
+    return code or "print('Empty script')", 200, {"Content-Type": "text/plain"}
 
 
 @app.route("/logout")
