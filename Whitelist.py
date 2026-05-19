@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import secrets
+import time
 
 from Database import db_execute, db_fetchone, db_fetchall
 from Helpers import *
@@ -14,17 +15,22 @@ def make_loader(key_code: str):
 loadstring(game:HttpGet("{base_url}/load?key=" .. script_key))()'''
 
 
-async def send_whitelist_log(guild, embed):
-    log_channel_id = os.getenv("LOG_WHITELIST")
-    if not log_channel_id or not guild:
+async def send_wl_log(guild, title, description, color=0x3498DB):
+    log_id = os.getenv("LOG_WHITELIST")
+    if not log_id or not guild:
         return
 
-    channel = guild.get_channel(int(log_channel_id))
-    if channel:
-        try:
-            await channel.send(embed=embed)
-        except:
-            pass
+    channel = guild.get_channel(int(log_id))
+    if not channel:
+        return
+
+    embed = discord.Embed(title=title, description=description, color=color)
+    embed.set_footer(text="OkveHUB Whitelist Logs")
+
+    try:
+        await channel.send(embed=embed)
+    except:
+        pass
 
 
 async def give_roles(member: discord.Member):
@@ -59,56 +65,74 @@ class RedeemModal(discord.ui.Modal, title="Redeem Key"):
 
     async def on_submit(self, interaction: discord.Interaction):
         key = self.key_code.value.strip().upper()
+        user_id = str(interaction.user.id)
+
+        blacklist = await db_fetchone("SELECT * FROM blacklist WHERE user_id=?", (user_id,))
+        if blacklist:
+            return await interaction.response.send_message(
+                embed=error_embed("Blacklisted", "You are blacklisted from OkveHUB."),
+                ephemeral=True
+            )
 
         row = await db_fetchone("SELECT * FROM keys WHERE key_code=?", (key,))
-
         if not row:
             return await interaction.response.send_message(
                 embed=error_embed("Invalid Key", "This key does not exist."),
                 ephemeral=True
             )
 
-        if row["used_by"]:
+        if row["status"] != "active":
             return await interaction.response.send_message(
-                embed=error_embed("Key Already Used", "This key has already been redeemed."),
+                embed=error_embed("Key Disabled", "This key is disabled."),
+                ephemeral=True
+            )
+
+        if row["expires_at"] and row["expires_at"] < int(time.time()):
+            return await interaction.response.send_message(
+                embed=error_embed("Key Expired", "This key has expired."),
+                ephemeral=True
+            )
+
+        if row["used_by"] and row["used_by"] != user_id:
+            return await interaction.response.send_message(
+                embed=error_embed("Key Already Used", "This key is already linked to another user."),
                 ephemeral=True
             )
 
         script_name = row["script_name"] or "main"
 
         await db_execute("""
-        INSERT INTO whitelist (user_id, username, added_by, reason, script_access)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO whitelist (user_id, username, added_by, reason, script_access, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
             username=excluded.username,
             reason=excluded.reason,
-            script_access=excluded.script_access
+            script_access=excluded.script_access,
+            expires_at=excluded.expires_at
         """, (
-            str(interaction.user.id),
+            user_id,
             str(interaction.user),
             "redeem_key",
             f"Redeemed {key}",
-            script_name
+            script_name,
+            row["expires_at"]
         ))
 
         await db_execute(
             "UPDATE keys SET used_by=?, used_at=strftime('%s','now') WHERE key_code=?",
-            (str(interaction.user.id), key)
+            (user_id, key)
         )
 
         await give_roles(interaction.user)
 
         loader = make_loader(key)
 
-        log_embed = discord.Embed(
-            title="🔑 Key Redeemed",
-            color=0xF1C40F
+        await send_wl_log(
+            interaction.guild,
+            "🔑 Key Redeemed",
+            f"User: {interaction.user.mention}\nKey: ||{key}||\nScript: `{script_name}`",
+            0xF1C40F
         )
-        log_embed.add_field(name="User", value=f"{interaction.user.mention}\n`{interaction.user.id}`", inline=False)
-        log_embed.add_field(name="Script", value=script_name, inline=True)
-        log_embed.add_field(name="Key", value=f"||{key}||", inline=True)
-        log_embed.set_footer(text="OkveHUB Logs")
-        await send_whitelist_log(interaction.guild, log_embed)
 
         await interaction.response.send_message(
             embed=success_embed(
@@ -123,18 +147,31 @@ class WhitelistPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.success, custom_id="okvehub_redeem_key_v4")
+    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.success, custom_id="okvehub_redeem_secure_v1")
     async def redeem_key(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-    @discord.ui.button(label="📜 Get Script", style=discord.ButtonStyle.primary, custom_id="okvehub_get_script_v4")
+    @discord.ui.button(label="📜 Get Script", style=discord.ButtonStyle.primary, custom_id="okvehub_get_script_secure_v1")
     async def get_script(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
-        wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (user_id,))
 
+        blacklist = await db_fetchone("SELECT * FROM blacklist WHERE user_id=?", (user_id,))
+        if blacklist:
+            return await interaction.response.send_message(
+                embed=error_embed("Blacklisted", "You are blacklisted from OkveHUB."),
+                ephemeral=True
+            )
+
+        wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (user_id,))
         if not wl:
             return await interaction.response.send_message(
                 embed=error_embed("Access Denied", "You are not whitelisted."),
+                ephemeral=True
+            )
+
+        if wl["expires_at"] and wl["expires_at"] < int(time.time()):
+            return await interaction.response.send_message(
+                embed=error_embed("Access Expired", "Your whitelist access has expired."),
                 ephemeral=True
             )
 
@@ -152,11 +189,11 @@ class WhitelistPanel(discord.ui.View):
         loader = make_loader(key["key_code"])
 
         await interaction.response.send_message(
-            f"📜 **Your script:**\n```lua\n{loader}\n```",
+            f"📜 **Your OkveHUB loader:**\n```lua\n{loader}\n```",
             ephemeral=True
         )
 
-    @discord.ui.button(label="👤 Get Role", style=discord.ButtonStyle.primary, custom_id="okvehub_get_role_v4")
+    @discord.ui.button(label="👤 Get Role", style=discord.ButtonStyle.primary, custom_id="okvehub_get_role_secure_v1")
     async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (str(interaction.user.id),))
 
@@ -169,38 +206,49 @@ class WhitelistPanel(discord.ui.View):
         await give_roles(interaction.user)
 
         await interaction.response.send_message(
-            embed=success_embed("Role Given", "You received your buyer/whitelist role."),
+            embed=success_embed("Roles Given", "Your buyer and whitelist roles were added."),
             ephemeral=True
         )
 
-    @discord.ui.button(label="⚙️ Reset HWID", style=discord.ButtonStyle.secondary, custom_id="okvehub_reset_hwid_v4")
+    @discord.ui.button(label="⚙️ Reset HWID", style=discord.ButtonStyle.secondary, custom_id="okvehub_reset_hwid_secure_v1")
     async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
 
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (user_id,))
-
         if not wl:
             return await interaction.response.send_message(
                 embed=error_embed("Access Denied", "You are not whitelisted."),
                 ephemeral=True
             )
 
+        old_hwid = wl["hwid"]
+
         await db_execute("UPDATE whitelist SET hwid=NULL WHERE user_id=?", (user_id,))
+        await db_execute(
+            "INSERT INTO hwid_resets (user_id, old_hwid, new_hwid, reset_by) VALUES (?, ?, ?, ?)",
+            (user_id, old_hwid, None, user_id)
+        )
+
+        await send_wl_log(
+            interaction.guild,
+            "⚙️ HWID Reset",
+            f"User: {interaction.user.mention}\nOld HWID: `{old_hwid or 'None'}`",
+            0xE67E22
+        )
 
         await interaction.response.send_message(
             embed=success_embed("HWID Reset", "Your HWID has been reset."),
             ephemeral=True
         )
 
-    @discord.ui.button(label="📊 Get Stats", style=discord.ButtonStyle.secondary, custom_id="okvehub_get_stats_v4")
+    @discord.ui.button(label="📊 Get Stats", style=discord.ButtonStyle.secondary, custom_id="okvehub_stats_secure_v1")
     async def get_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
 
         wl = await db_fetchone("SELECT * FROM whitelist WHERE user_id=?", (user_id,))
-        key = await db_fetchone(
-            "SELECT * FROM keys WHERE used_by=? ORDER BY used_at DESC LIMIT 1",
-            (user_id,)
-        )
+        key = await db_fetchone("SELECT * FROM keys WHERE used_by=? ORDER BY used_at DESC LIMIT 1", (user_id,))
+        resets = await db_fetchall("SELECT * FROM hwid_resets WHERE user_id=?", (user_id,))
+        executions = await db_fetchall("SELECT * FROM execution_logs WHERE user_id=?", (user_id,))
         blacklist = await db_fetchone("SELECT * FROM blacklist WHERE user_id=?", (user_id,))
 
         if not wl:
@@ -209,22 +257,18 @@ class WhitelistPanel(discord.ui.View):
                 ephemeral=True
             )
 
-        hwid_status = "Assigned ✅" if wl["hwid"] else "Not assigned ❌"
-        key_text = key["key_code"] if key else "No key"
-        script_name = wl["script_access"] or "main"
-        banned = "Yes ⛔" if blacklist else "No ⛔"
+        expires = "Never" if not wl["expires_at"] else f"<t:{wl['expires_at']}:R>"
 
         embed = discord.Embed(title="Stats", color=0xF1C40F)
         embed.description = (
-            f"**Total Executions:** `0` 🧠\n"
-            f"**HWID Status:** {hwid_status}\n"
-            f"**Key:** ||{key_text}|| 🔒\n"
-            f"**Total HWID Resets:** `0` ⚙️\n"
-            f"**Script:** `{script_name}`\n"
-            f"**Expires At:** `Never` 📅\n"
-            f"**Banned:** {banned}\n\n"
-            f"**Note:**\n"
-            f"Not specified"
+            f"**Total Executions:** `{len(executions)}` 🧠\n"
+            f"**HWID Status:** {'Assigned ✅' if wl['hwid'] else 'Not assigned ❌'}\n"
+            f"**Key:** ||{key['key_code'] if key else 'No key'}|| 🔒\n"
+            f"**Total HWID Resets:** `{len(resets)}` ⚙️\n"
+            f"**Script:** `{wl['script_access'] or 'main'}`\n"
+            f"**Expires At:** `{expires}` 📅\n"
+            f"**Banned:** {'Yes ⛔' if blacklist else 'No ✅'}\n\n"
+            f"**Note:**\nNot specified"
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -249,18 +293,11 @@ class Whitelist(commands.Cog):
             color=0xF1C40F
         )
 
-        embed.set_footer(
-            text=f"Sent by {interaction.user} • {discord.utils.utcnow().strftime('%d/%m/%Y %H:%M')}"
-        )
+        embed.set_footer(text=f"Sent by {interaction.user} • {discord.utils.utcnow().strftime('%d/%m/%Y %H:%M')}")
 
         msg = await interaction.channel.send(embed=embed, view=WhitelistPanel())
 
-        reactions = [
-            "✅", "❤️", "🌐", "🆓", "😂", "🤧", "🇾", "🇹", "🇷",
-            "❌", "💀", "👍", "🥺", "ℹ️", "🧢", "6️⃣", "🇼", "🤢", "🧻", "☺️"
-        ]
-
-        for emoji in reactions:
+        for emoji in ["✅", "❤️", "🌐", "🆓", "😂", "🤧", "❌", "💀", "👍", "ℹ️"]:
             try:
                 await msg.add_reaction(emoji)
             except:
@@ -269,31 +306,40 @@ class Whitelist(commands.Cog):
         await interaction.response.send_message("✅ Panel envoyé.", ephemeral=True)
 
     @app_commands.command(name="wl-add", description="Ajouter un utilisateur à la whitelist")
-    async def wl_add(self, interaction: discord.Interaction, utilisateur: discord.Member, script: str = "main"):
+    async def wl_add(
+        self,
+        interaction: discord.Interaction,
+        utilisateur: discord.Member,
+        script: str = "main",
+        jours: int = 0
+    ):
         if not await check_permission(interaction, "staff"):
             return
 
         key_code = "OKV-" + secrets.token_hex(8).upper()
+        expires_at = None if jours <= 0 else int(time.time()) + (jours * 86400)
 
         await db_execute(
-            "INSERT INTO keys (key_code, script_name, used_by, used_at) VALUES (?, ?, ?, strftime('%s','now'))",
-            (key_code, script, str(utilisateur.id))
+            "INSERT INTO keys (key_code, script_name, used_by, used_at, expires_at, status) VALUES (?, ?, ?, strftime('%s','now'), ?, 'active')",
+            (key_code, script, str(utilisateur.id), expires_at)
         )
 
         await db_execute("""
-        INSERT INTO whitelist (user_id, username, added_by, reason, script_access)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO whitelist (user_id, username, added_by, reason, script_access, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
             username=excluded.username,
             added_by=excluded.added_by,
             reason=excluded.reason,
-            script_access=excluded.script_access
+            script_access=excluded.script_access,
+            expires_at=excluded.expires_at
         """, (
             str(utilisateur.id),
             str(utilisateur),
             str(interaction.user.id),
             "Ajout manuel + key générée",
-            script
+            script,
+            expires_at
         ))
 
         await give_roles(utilisateur)
@@ -301,37 +347,27 @@ class Whitelist(commands.Cog):
         loader = make_loader(key_code)
 
         try:
-            embed_dm = discord.Embed(
-                title="🔐 OkveHUB Access",
-                description=(
-                    f"You have been whitelisted ✅\n\n"
-                    f"**Script:** `{script}`\n"
-                    f"**Key:** `{key_code}`\n\n"
-                    f"```lua\n{loader}\n```"
-                ),
-                color=COLOR_SUCCESS
+            await utilisateur.send(
+                embed=success_embed(
+                    "OkveHUB Access",
+                    f"You have been whitelisted ✅\n\n**Script:** `{script}`\n**Key:** `{key_code}`\n\n```lua\n{loader}\n```"
+                )
             )
-            embed_dm.set_footer(text="OkveHUB Loader System")
-            await utilisateur.send(embed=embed_dm)
             dm_status = "DM envoyé ✅"
         except:
             dm_status = "DM fermé ❌"
 
-        log_embed = discord.Embed(title="🔐 New Whitelist", color=0x00FF88)
-        log_embed.add_field(name="User", value=f"{utilisateur.mention}\n`{utilisateur.id}`", inline=False)
-        log_embed.add_field(name="Script", value=script, inline=True)
-        log_embed.add_field(name="Key", value=f"||{key_code}||", inline=True)
-        log_embed.add_field(name="Whitelisted By", value=interaction.user.mention, inline=False)
-        log_embed.add_field(name="DM Status", value=dm_status, inline=True)
-        log_embed.set_footer(text="OkveHUB Logs")
-        await send_whitelist_log(interaction.guild, log_embed)
+        await send_wl_log(
+            interaction.guild,
+            "🔐 New Whitelist",
+            f"User: {utilisateur.mention}\nScript: `{script}`\nKey: ||{key_code}||\nBy: {interaction.user.mention}\n{dm_status}",
+            0x00FF88
+        )
 
         await interaction.response.send_message(
             embed=success_embed(
                 "Whitelist ajoutée",
-                f"{utilisateur.mention} a accès à **{script}**.\n"
-                f"Key : `{key_code}`\n"
-                f"{dm_status}"
+                f"{utilisateur.mention} a accès à **{script}**.\nKey : `{key_code}`\n{dm_status}"
             ),
             ephemeral=True
         )
@@ -344,11 +380,12 @@ class Whitelist(commands.Cog):
         await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
         await remove_roles(utilisateur)
 
-        log_embed = discord.Embed(title="🗑️ Whitelist Removed", color=0xFF4444)
-        log_embed.add_field(name="User", value=f"{utilisateur.mention}\n`{utilisateur.id}`", inline=False)
-        log_embed.add_field(name="Removed By", value=interaction.user.mention, inline=False)
-        log_embed.set_footer(text="OkveHUB Logs")
-        await send_whitelist_log(interaction.guild, log_embed)
+        await send_wl_log(
+            interaction.guild,
+            "🗑️ Whitelist Removed",
+            f"User: {utilisateur.mention}\nRemoved by: {interaction.user.mention}",
+            0xFF4444
+        )
 
         await interaction.response.send_message(
             embed=success_embed("Whitelist retirée", f"{utilisateur.mention} n'est plus whitelist."),
@@ -372,15 +409,40 @@ class Whitelist(commands.Cog):
             (str(target.id),)
         )
 
-        key_text = key["key_code"] if key else "No key"
-
         embed = discord.Embed(title="Whitelist Check", color=COLOR_WL)
         embed.add_field(name="User", value=target.mention, inline=True)
         embed.add_field(name="Script", value=row["script_access"] or "main", inline=True)
-        embed.add_field(name="Key", value=f"||{key_text}||", inline=False)
+        embed.add_field(name="Key", value=f"||{key['key_code'] if key else 'No key'}||", inline=False)
         embed.add_field(name="HWID", value=row["hwid"] or "Not assigned", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="wl-blacklist", description="Blacklist un utilisateur")
+    async def wl_blacklist(self, interaction: discord.Interaction, utilisateur: discord.Member, raison: str):
+        if not await check_permission(interaction, "admin"):
+            return
+
+        await db_execute("""
+        INSERT INTO blacklist (user_id, username, reason, added_by)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            username=excluded.username,
+            reason=excluded.reason,
+            added_by=excluded.added_by
+        """, (
+            str(utilisateur.id),
+            str(utilisateur),
+            raison,
+            str(interaction.user.id)
+        ))
+
+        await db_execute("DELETE FROM whitelist WHERE user_id=?", (str(utilisateur.id),))
+        await remove_roles(utilisateur)
+
+        await interaction.response.send_message(
+            embed=success_embed("Blacklisted", f"{utilisateur.mention} est blacklist.\nRaison : {raison}"),
+            ephemeral=True
+        )
 
     @app_commands.command(name="wl-list", description="Voir la liste whitelist")
     async def wl_list(self, interaction: discord.Interaction):
