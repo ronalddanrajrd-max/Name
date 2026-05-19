@@ -99,7 +99,7 @@ class RedeemModal(discord.ui.Modal, title="Redeem Key"):
                 ephemeral=True
             )
 
-        script_name = row["script_name"] or "main"
+        script_name = row["script_name"] or "OkveHUB"
 
         await db_execute("""
         INSERT INTO whitelist (user_id, username, added_by, reason, script_access, expires_at)
