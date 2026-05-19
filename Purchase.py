@@ -296,7 +296,7 @@ class PurchasePanel(discord.ui.View):
     async def buy_ltc(self, interaction: discord.Interaction, button: discord.ui.Button):
         address = os.getenv("LTC_ADDRESS")
         amount = float(os.getenv("LTC_AMOUNT", "0.00092"))
-        script_name = os.getenv("PURCHASE_SCRIPT", "main")
+        script_name = os.getenv("PURCHASE_SCRIPT", "OkveHUB")
 
         if not address:
             return await interaction.response.send_message(
