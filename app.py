@@ -25,125 +25,293 @@ def protect():
 
 STYLE = """
 <style>
-body{
-background:#020617;
-color:white;
-font-family:Arial;
-margin:0;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
 }
+
+body{
+    background:#050816;
+    color:white;
+    font-family:'Inter',sans-serif;
+    overflow-x:hidden;
+}
+
+/* SIDEBAR */
 
 .sidebar{
-position:fixed;
-left:0;
-top:0;
-width:250px;
-height:100vh;
-background:#0f172a;
-padding:25px;
-border-right:1px solid #1e293b;
+    position:fixed;
+    left:0;
+    top:0;
+    width:270px;
+    height:100vh;
+    background:linear-gradient(180deg,#0b1220,#090f1c);
+    border-right:1px solid rgba(255,255,255,0.05);
+    padding:24px;
+    z-index:100;
 }
 
-.sidebar h2{
-color:#38bdf8;
+.logo{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    margin-bottom:35px;
+}
+
+.logo-icon{
+    width:42px;
+    height:42px;
+    border-radius:12px;
+    background:linear-gradient(135deg,#38bdf8,#6366f1);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:18px;
+    font-weight:bold;
+    box-shadow:0 0 25px #38bdf855;
+}
+
+.logo h2{
+    font-size:22px;
+    font-weight:700;
+}
+
+.sidebar-links{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
 }
 
 .sidebar a{
-display:block;
-color:#cbd5e1;
-text-decoration:none;
-padding:12px;
-border-radius:10px;
-margin:7px 0;
+    text-decoration:none;
+    color:#94a3b8;
+    padding:14px 16px;
+    border-radius:14px;
+    transition:0.25s;
+    font-size:15px;
+    font-weight:500;
+    display:flex;
+    align-items:center;
+    gap:12px;
 }
 
 .sidebar a:hover{
-background:#1e293b;
-color:#38bdf8;
+    background:#111827;
+    color:white;
+    transform:translateX(3px);
 }
+
+.sidebar .active{
+    background:linear-gradient(135deg,#38bdf8,#6366f1);
+    color:white;
+    box-shadow:0 0 20px #38bdf833;
+}
+
+/* MAIN */
 
 .main{
-margin-left:290px;
-padding:35px;
+    margin-left:270px;
+    padding:35px;
+    min-height:100vh;
+    background:
+    radial-gradient(circle at top right,#2563eb22,transparent 35%),
+    radial-gradient(circle at bottom left,#7c3aed22,transparent 35%),
+    #050816;
 }
 
-.card{
-background:#111827;
-padding:20px;
-border-radius:18px;
-margin-bottom:20px;
-border:1px solid #334155;
+/* TOPBAR */
+
+.topbar{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:30px;
 }
+
+.topbar h1{
+    font-size:34px;
+    font-weight:700;
+}
+
+.profile{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    background:#0f172a;
+    padding:10px 16px;
+    border-radius:14px;
+    border:1px solid rgba(255,255,255,0.05);
+}
+
+.profile span{
+    color:#cbd5e1;
+    font-weight:600;
+}
+
+/* GRID */
 
 .grid{
-display:grid;
-grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
-gap:20px;
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:22px;
+    margin-bottom:25px;
 }
 
-.stat{
-background:#0f172a;
-padding:20px;
-border-radius:18px;
-border:1px solid #334155;
+/* CARDS */
+
+.card{
+    background:linear-gradient(180deg,#0f172a,#0b1220);
+    border:1px solid rgba(255,255,255,0.06);
+    border-radius:22px;
+    padding:24px;
+    position:relative;
+    overflow:hidden;
+    box-shadow:0 12px 40px rgba(0,0,0,0.4);
 }
 
-.stat h2{
-color:#38bdf8;
-font-size:34px;
-margin:0;
+.card::before{
+    content:'';
+    position:absolute;
+    top:-50px;
+    right:-50px;
+    width:120px;
+    height:120px;
+    background:#38bdf822;
+    border-radius:50%;
+}
+
+.stat-title{
+    color:#94a3b8;
+    font-size:14px;
+    margin-bottom:12px;
+}
+
+.stat-number{
+    font-size:42px;
+    font-weight:700;
+    color:#38bdf8;
+}
+
+/* TABLE */
+
+.table-card{
+    background:linear-gradient(180deg,#0f172a,#0b1220);
+    border-radius:22px;
+    padding:24px;
+    border:1px solid rgba(255,255,255,0.06);
+    overflow:hidden;
 }
 
 table{
-width:100%;
-border-collapse:collapse;
-}
-
-th,td{
-padding:12px;
-border-bottom:1px solid #334155;
-text-align:left;
+    width:100%;
+    border-collapse:collapse;
 }
 
 th{
-color:#38bdf8;
+    text-align:left;
+    color:#38bdf8;
+    padding:16px;
+    font-size:14px;
+    border-bottom:1px solid rgba(255,255,255,0.06);
 }
 
-.ok{
-color:#22c55e;
-font-weight:bold;
+td{
+    padding:16px;
+    color:#cbd5e1;
+    border-bottom:1px solid rgba(255,255,255,0.04);
 }
 
-.pending{
-color:#facc15;
-font-weight:bold;
+tr:hover td{
+    background:#111827;
 }
+
+/* BADGES */
+
+.badge{
+    padding:6px 12px;
+    border-radius:999px;
+    font-size:13px;
+    font-weight:700;
+}
+
+.badge-success{
+    background:#22c55e22;
+    color:#22c55e;
+}
+
+.badge-warning{
+    background:#facc1522;
+    color:#facc15;
+}
+
+.badge-danger{
+    background:#ef444422;
+    color:#ef4444;
+}
+
+button{
+    background:linear-gradient(135deg,#38bdf8,#6366f1);
+    border:none;
+    color:white;
+    padding:13px 20px;
+    border-radius:14px;
+    font-weight:700;
+    cursor:pointer;
+}
+
+input,
+textarea{
+    width:100%;
+    padding:14px;
+    border-radius:14px;
+    border:1px solid rgba(255,255,255,0.08);
+    background:#020617;
+    color:white;
+    margin-top:10px;
+    margin-bottom:14px;
+}
+
 </style>
 """
 
 
 def layout(content):
     return STYLE + f"""
-    <div class="sidebar">
-        <h2>⚡ OkveHUB</h2>
 
-        <a href="/">Dashboard</a>
-        <a href="/whitelist">Whitelist</a>
-        <a href="/keys">Keys</a>
-        <a href="/scripts">Scripts</a>
-        <a href="/purchases">Purchases</a>
-        <a href="/executions">Executions</a>
-        <a href="/blacklist">Blacklist</a>
-        <a href="/logout">Logout</a>
+<div class="sidebar">
+
+    <div class="logo">
+        <div class="logo-icon">⚡</div>
+        <h2>OkveHUB</h2>
     </div>
 
-    <div class="main">
-        {content}
+    <div class="sidebar-links">
+        <a class="active" href="/">📊 Dashboard</a>
+        <a href="/whitelist">🔐 Whitelist</a>
+        <a href="/keys">🔑 Keys</a>
+        <a href="/scripts">📜 Scripts</a>
+        <a href="/purchases">🛒 Purchases</a>
+        <a href="/executions">🧠 Executions</a>
+        <a href="/blacklist">⛔ Blacklist</a>
+        <a href="/logout">🚪 Logout</a>
     </div>
-    """
+
+</div>
+
+<div class="main">
+    {content}
+</div>
+
+"""
 
 
 @app.route("/login")
 def login():
+
     client_id = os.getenv("DISCORD_CLIENT_ID")
     redirect_uri = os.getenv("DISCORD_REDIRECT_URI")
 
@@ -160,6 +328,7 @@ def login():
 
 @app.route("/callback")
 def callback():
+
     code = request.args.get("code")
 
     if not code:
@@ -185,6 +354,7 @@ def callback():
     )
 
     token_json = token_res.json()
+
     access_token = token_json.get("access_token")
 
     if not access_token:
@@ -213,6 +383,7 @@ def callback():
 
 @app.route("/")
 def home():
+
     if not protect():
         return redirect("/login")
 
@@ -234,48 +405,60 @@ def home():
         "SELECT COUNT(*) c FROM purchases"
     ).fetchone()["c"]
 
-    executions = conn.execute(
+    executions_count = conn.execute(
         "SELECT COUNT(*) c FROM execution_logs"
     ).fetchone()["c"]
 
     conn.close()
 
-    return layout(f"""
+    html = f"""
+
+<div class="topbar">
+
     <h1>Dashboard</h1>
 
-    <div class="grid">
-
-        <div class="stat">
-            <h2>{whitelist_count}</h2>
-            <p>Whitelist Users</p>
-        </div>
-
-        <div class="stat">
-            <h2>{keys_count}</h2>
-            <p>Keys</p>
-        </div>
-
-        <div class="stat">
-            <h2>{scripts_count}</h2>
-            <p>Scripts</p>
-        </div>
-
-        <div class="stat">
-            <h2>{purchases_count}</h2>
-            <p>Purchases</p>
-        </div>
-
-        <div class="stat">
-            <h2>{executions}</h2>
-            <p>Executions</p>
-        </div>
-
+    <div class="profile">
+        <span>{session.get("username")}</span>
     </div>
-    """)
 
+</div>
+
+<div class="grid">
+
+    <div class="card">
+        <div class="stat-title">Whitelist Users</div>
+        <div class="stat-number">{whitelist_count}</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-title">Keys</div>
+        <div class="stat-number">{keys_count}</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-title">Scripts</div>
+        <div class="stat-number">{scripts_count}</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-title">Purchases</div>
+        <div class="stat-number">{purchases_count}</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-title">Executions</div>
+        <div class="stat-number">{executions_count}</div>
+    </div>
+
+</div>
+
+"""
+
+    return layout(html)
 
 @app.route("/whitelist")
 def whitelist():
+
     if not protect():
         return redirect("/login")
 
@@ -288,36 +471,45 @@ def whitelist():
     conn.close()
 
     html = """
+
+<div class="topbar">
     <h1>Whitelist</h1>
+</div>
 
-    <div class="card">
-    <table>
+<div class="table-card">
 
-    <tr>
-        <th>User ID</th>
-        <th>Username</th>
-        <th>Script</th>
-        <th>HWID</th>
-    </tr>
+<table>
 
-    {% for u in rows %}
-    <tr>
-        <td>{{u["user_id"]}}</td>
-        <td>{{u["username"]}}</td>
-        <td>{{u["script_access"]}}</td>
-        <td>{{u["hwid"] or "None"}}</td>
-    </tr>
-    {% endfor %}
+<tr>
+    <th>User ID</th>
+    <th>Username</th>
+    <th>Script</th>
+    <th>HWID</th>
+</tr>
 
-    </table>
-    </div>
-    """
+{% for u in rows %}
+
+<tr>
+    <td>{{u["user_id"]}}</td>
+    <td>{{u["username"]}}</td>
+    <td>{{u["script_access"]}}</td>
+    <td>{{u["hwid"] or "None"}}</td>
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+"""
 
     return layout(render_template_string(html, rows=rows))
 
 
 @app.route("/keys")
 def keys():
+
     if not protect():
         return redirect("/login")
 
@@ -330,36 +522,51 @@ def keys():
     conn.close()
 
     html = """
+
+<div class="topbar">
     <h1>Keys</h1>
+</div>
 
-    <div class="card">
-    <table>
+<div class="table-card">
 
-    <tr>
-        <th>Key</th>
-        <th>Script</th>
-        <th>User</th>
-        <th>Status</th>
-    </tr>
+<table>
 
-    {% for k in rows %}
-    <tr>
-        <td>{{k["key_code"]}}</td>
-        <td>{{k["script_name"]}}</td>
-        <td>{{k["used_by"] or "Unused"}}</td>
-        <td>{{k["status"] or "active"}}</td>
-    </tr>
-    {% endfor %}
+<tr>
+    <th>Key</th>
+    <th>Script</th>
+    <th>User</th>
+    <th>Status</th>
+</tr>
 
-    </table>
-    </div>
-    """
+{% for k in rows %}
+
+<tr>
+    <td>{{k["key_code"]}}</td>
+    <td>{{k["script_name"]}}</td>
+    <td>{{k["used_by"] or "Unused"}}</td>
+    <td>
+        {% if k["status"] == "active" %}
+            <span class="badge badge-success">Active</span>
+        {% else %}
+            <span class="badge badge-danger">Disabled</span>
+        {% endif %}
+    </td>
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+"""
 
     return layout(render_template_string(html, rows=rows))
 
 
 @app.route("/scripts")
 def scripts():
+
     if not protect():
         return redirect("/login")
 
@@ -372,34 +579,41 @@ def scripts():
     conn.close()
 
     html = """
+
+<div class="topbar">
     <h1>Scripts</h1>
+</div>
 
-    <div class="card">
-    <table>
+<div class="table-card">
 
-    <tr>
-        <th>Name</th>
-        <th>Description</th>
-        <th>Executions</th>
-    </tr>
+<table>
 
-    {% for s in rows %}
-    <tr>
-        <td>{{s["name"]}}</td>
-        <td>{{s["description"]}}</td>
-        <td>{{s["executions"] or 0}}</td>
-    </tr>
-    {% endfor %}
+<tr>
+    <th>Name</th>
+    <th>Description</th>
+    <th>Executions</th>
+</tr>
 
-    </table>
-    </div>
-    """
+{% for s in rows %}
+
+<tr>
+    <td>{{s["name"]}}</td>
+    <td>{{s["description"]}}</td>
+    <td>{{s["executions"] or 0}}</td>
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+"""
 
     return layout(render_template_string(html, rows=rows))
-
-
 @app.route("/purchases")
 def purchases():
+
     if not protect():
         return redirect("/login")
 
@@ -412,46 +626,53 @@ def purchases():
     conn.close()
 
     html = """
+
+<div class="topbar">
     <h1>Purchases</h1>
+</div>
 
-    <div class="card">
-    <table>
+<div class="table-card">
 
-    <tr>
-        <th>ID</th>
-        <th>User</th>
-        <th>Method</th>
-        <th>Status</th>
-        <th>TX</th>
-    </tr>
+<table>
 
-    {% for p in rows %}
-    <tr>
-        <td>{{p["purchase_id"]}}</td>
-        <td>{{p["username"]}}</td>
-        <td>{{p["method"]}}</td>
+<tr>
+    <th>ID</th>
+    <th>User</th>
+    <th>Method</th>
+    <th>Status</th>
+    <th>TX</th>
+</tr>
 
-        <td>
+{% for p in rows %}
+
+<tr>
+    <td>{{p["purchase_id"]}}</td>
+    <td>{{p["username"]}}</td>
+    <td>{{p["method"]}}</td>
+    <td>
         {% if p["status"] == "completed" %}
-        <span class="ok">Completed</span>
+            <span class="badge badge-success">Completed</span>
         {% else %}
-        <span class="pending">Pending</span>
+            <span class="badge badge-warning">Pending</span>
         {% endif %}
-        </td>
+    </td>
+    <td>{{p["tx_hash"] or "None"}}</td>
+</tr>
 
-        <td>{{p["tx_hash"] or "None"}}</td>
-    </tr>
-    {% endfor %}
+{% endfor %}
 
-    </table>
-    </div>
-    """
+</table>
+
+</div>
+
+"""
 
     return layout(render_template_string(html, rows=rows))
 
 
 @app.route("/executions")
 def executions():
+
     if not protect():
         return redirect("/login")
 
@@ -464,38 +685,53 @@ def executions():
     conn.close()
 
     html = """
+
+<div class="topbar">
     <h1>Executions</h1>
+</div>
 
-    <div class="card">
-    <table>
+<div class="table-card">
 
-    <tr>
-        <th>User</th>
-        <th>Key</th>
-        <th>Script</th>
-        <th>Executor</th>
-        <th>Status</th>
-    </tr>
+<table>
 
-    {% for e in rows %}
-    <tr>
-        <td>{{e["user_id"]}}</td>
-        <td>{{e["key_code"]}}</td>
-        <td>{{e["script_name"]}}</td>
-        <td>{{e["executor"] or "Unknown"}}</td>
-        <td>{{e["status"]}}</td>
-    </tr>
-    {% endfor %}
+<tr>
+    <th>User</th>
+    <th>Key</th>
+    <th>Script</th>
+    <th>Executor</th>
+    <th>Status</th>
+</tr>
 
-    </table>
-    </div>
-    """
+{% for e in rows %}
+
+<tr>
+    <td>{{e["user_id"]}}</td>
+    <td>{{e["key_code"]}}</td>
+    <td>{{e["script_name"]}}</td>
+    <td>{{e["executor"] or "Unknown"}}</td>
+    <td>
+        {% if e["status"] == "success" %}
+            <span class="badge badge-success">Success</span>
+        {% else %}
+            <span class="badge badge-danger">{{e["status"]}}</span>
+        {% endif %}
+    </td>
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+"""
 
     return layout(render_template_string(html, rows=rows))
 
 
 @app.route("/blacklist")
 def blacklist():
+
     if not protect():
         return redirect("/login")
 
@@ -508,48 +744,49 @@ def blacklist():
     conn.close()
 
     html = """
+
+<div class="topbar">
     <h1>Blacklist</h1>
+</div>
 
-    <div class="card">
-    <table>
+<div class="table-card">
 
-    <tr>
-        <th>User</th>
-        <th>Reason</th>
-    </tr>
+<table>
 
-    {% for b in rows %}
-    <tr>
-        <td>{{b["username"]}}</td>
-        <td>{{b["reason"]}}</td>
-    </tr>
-    {% endfor %}
+<tr>
+    <th>User</th>
+    <th>Reason</th>
+</tr>
 
-    </table>
-    </div>
-    """
+{% for b in rows %}
+
+<tr>
+    <td>{{b["username"]}}</td>
+    <td>{{b["reason"]}}</td>
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+"""
 
     return layout(render_template_string(html, rows=rows))
-
 
 @app.route("/load")
 def load_script():
     user_agent = request.headers.get("User-Agent", "").lower()
 
-    blocked_agents = [
-        "mozilla",
-        "chrome",
-        "safari",
-        "firefox",
-        "edge"
-    ]
+    blocked_agents = ["mozilla", "chrome", "safari", "firefox", "edge", "opera", "brave"]
 
     if any(agent in user_agent for agent in blocked_agents):
         return "Access denied", 403
 
     key = request.args.get("key", "").strip().upper()
     hwid = request.args.get("hwid", "").strip()
-    executor = request.args.get("executor", "Unknown")
+    executor = request.args.get("executor", "Unknown").strip()
 
     conn = db()
 
@@ -563,6 +800,7 @@ def load_script():
         return "print('Invalid key')"
 
     user_id = key_row["used_by"]
+    script_name = key_row["script_name"] or "main"
 
     wl = conn.execute(
         "SELECT * FROM whitelist WHERE user_id=?",
@@ -574,7 +812,22 @@ def load_script():
         return "print('Access denied')"
 
     if wl["hwid"] and hwid and wl["hwid"] != hwid:
+        conn.execute("""
+        INSERT INTO execution_logs
+        (user_id, key_code, script_name, hwid, executor, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            key,
+            script_name,
+            hwid,
+            executor,
+            "hwid_mismatch"
+        ))
+
+        conn.commit()
         conn.close()
+
         return "print('HWID mismatch')"
 
     if not wl["hwid"] and hwid:
@@ -582,8 +835,6 @@ def load_script():
             "UPDATE whitelist SET hwid=? WHERE user_id=?",
             (hwid, user_id)
         )
-
-    script_name = key_row["script_name"] or "main"
 
     script = conn.execute(
         "SELECT * FROM scripts WHERE name=? AND active=1",
@@ -601,8 +852,8 @@ def load_script():
 
     conn.execute("""
     INSERT INTO execution_logs
-    (user_id,key_code,script_name,hwid,executor,status)
-    VALUES(?,?,?,?,?,?)
+    (user_id, key_code, script_name, hwid, executor, status)
+    VALUES (?, ?, ?, ?, ?, ?)
     """, (
         user_id,
         key,
