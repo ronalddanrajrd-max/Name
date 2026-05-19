@@ -111,15 +111,15 @@ def init_db_site():
     );
     """)
 
-    for query in [
+    for q in [
         "ALTER TABLE keys ADD COLUMN expires_at INTEGER",
         "ALTER TABLE keys ADD COLUMN status TEXT DEFAULT 'active'",
         "ALTER TABLE scripts ADD COLUMN executions INTEGER DEFAULT 0",
         "ALTER TABLE whitelist ADD COLUMN expires_at INTEGER DEFAULT NULL",
     ]:
         try:
-            conn.execute(query)
-        except:
+            conn.execute(q)
+        except Exception:
             pass
 
     conn.execute("""
@@ -172,6 +172,7 @@ def layout(content):
     <div class="sidebar">
         <div class="logo"><div class="logo-icon">⚡</div><h2>OkveHUB</h2></div>
         <a href="/">📊 Dashboard</a>
+        <a href="/analytics">📈 Analytics</a>
         <a href="/users">👥 Users</a>
         <a href="/whitelist">🔐 Whitelist</a>
         <a href="/keys">🔑 Keys</a>
@@ -191,6 +192,7 @@ def layout(content):
 def login():
     client_id = os.getenv("DISCORD_CLIENT_ID")
     redirect_uri = os.getenv("DISCORD_REDIRECT_URI")
+
     url = (
         "https://discord.com/oauth2/authorize"
         f"?client_id={client_id}"
@@ -266,6 +268,127 @@ def home():
         <div class="card"><div class="stat-title">Blacklist</div><div class="stat-number">{blacklist_count}</div></div>
     </div>
     """)
+
+
+@app.route("/analytics")
+def analytics():
+    if not protect():
+        return redirect("/login")
+
+    conn = db()
+
+    total_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs").fetchone()["c"]
+    success_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs WHERE status='success'").fetchone()["c"]
+    blocked_exec = conn.execute("SELECT COUNT(*) c FROM execution_logs WHERE status!='success'").fetchone()["c"]
+
+    top_users = conn.execute("""
+        SELECT user_id, COUNT(*) total
+        FROM execution_logs
+        GROUP BY user_id
+        ORDER BY total DESC
+        LIMIT 10
+    """).fetchall()
+
+    top_scripts = conn.execute("""
+        SELECT script_name, COUNT(*) total
+        FROM execution_logs
+        GROUP BY script_name
+        ORDER BY total DESC
+        LIMIT 10
+    """).fetchall()
+
+    top_executors = conn.execute("""
+        SELECT executor, COUNT(*) total
+        FROM execution_logs
+        GROUP BY executor
+        ORDER BY total DESC
+        LIMIT 10
+    """).fetchall()
+
+    recent_logs = conn.execute("""
+        SELECT *
+        FROM execution_logs
+        ORDER BY created_at DESC
+        LIMIT 20
+    """).fetchall()
+
+    conn.close()
+
+    html = """
+    <div class="topbar"><h1>Analytics</h1></div>
+
+    <div class="grid">
+        <div class="card"><div class="stat-title">Total Executions</div><div class="stat-number">{{total_exec}}</div></div>
+        <div class="card"><div class="stat-title">Successful</div><div class="stat-number">{{success_exec}}</div></div>
+        <div class="card"><div class="stat-title">Blocked</div><div class="stat-number">{{blocked_exec}}</div></div>
+    </div>
+
+    <div class="grid">
+        <div class="table-card">
+            <h2>Top Users</h2>
+            <table>
+                <tr><th>User ID</th><th>Executions</th></tr>
+                {% for u in top_users %}
+                <tr><td>{{u["user_id"]}}</td><td>{{u["total"]}}</td></tr>
+                {% endfor %}
+            </table>
+        </div>
+
+        <div class="table-card">
+            <h2>Top Scripts</h2>
+            <table>
+                <tr><th>Script</th><th>Executions</th></tr>
+                {% for s in top_scripts %}
+                <tr><td>{{s["script_name"]}}</td><td>{{s["total"]}}</td></tr>
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+
+    <div class="table-card">
+        <h2>Top Executors</h2>
+        <table>
+            <tr><th>Executor</th><th>Executions</th></tr>
+            {% for e in top_executors %}
+            <tr><td>{{e["executor"] or "Unknown"}}</td><td>{{e["total"]}}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="table-card">
+        <h2>Recent Executions</h2>
+        <table>
+            <tr><th>User</th><th>Key</th><th>Script</th><th>HWID</th><th>Executor</th><th>Status</th></tr>
+            {% for log in recent_logs %}
+            <tr>
+                <td>{{log["user_id"]}}</td>
+                <td>{{log["key_code"]}}</td>
+                <td>{{log["script_name"]}}</td>
+                <td>{{log["hwid"] or "None"}}</td>
+                <td>{{log["executor"] or "Unknown"}}</td>
+                <td>
+                    {% if log["status"] == "success" %}
+                    <span class="badge badge-success">Success</span>
+                    {% else %}
+                    <span class="badge badge-danger">{{log["status"]}}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    """
+
+    return layout(render_template_string(
+        html,
+        total_exec=total_exec,
+        success_exec=success_exec,
+        blocked_exec=blocked_exec,
+        top_users=top_users,
+        top_scripts=top_scripts,
+        top_executors=top_executors,
+        recent_logs=recent_logs
+    ))
 
 
 @app.route("/users")
@@ -393,7 +516,10 @@ def scripts():
         code = request.form.get("code", "")
 
         if old_name:
-            conn.execute("UPDATE scripts SET name=?, description=?, code=?, active=1 WHERE name=?", (name, description, code, old_name))
+            conn.execute(
+                "UPDATE scripts SET name=?, description=?, code=?, active=1 WHERE name=?",
+                (name, description, code, old_name)
+            )
             conn.execute("UPDATE keys SET script_name=? WHERE script_name=?", (name, old_name))
             conn.execute("UPDATE whitelist SET script_access=? WHERE script_access=?", (name, old_name))
             conn.execute("UPDATE purchases SET script_name=? WHERE script_name=?", (name, old_name))
